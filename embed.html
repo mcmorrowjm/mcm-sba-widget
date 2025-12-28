@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Smart Booking Assistant</title>
+</head>
+<body style="margin:0">
+  <div id="mcm-sba-inline"></div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const client = params.get("client") || "";
+    const api = params.get("api") || "";
+    const widget = document.createElement("script");
+    widget.src = "./widget.js";
+    widget.setAttribute("data-client", client);
+    widget.setAttribute("data-api", api);
+    widget.setAttribute("data-inline", "#mcm-sba-inline");
+    widget.defer = true;
+    document.head.appendChild(widget);
+  </script>
+</body>
+</html>

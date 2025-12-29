@@ -28,7 +28,10 @@
 
     const theme = {
       color: config.brand_primary_color || "#111111",
-      label: config.brand_button_label || "Book Now",
+      // Floating launcher button label (per-client override)
+      label: (config.primary_cta_label || config.brand_button_label || "Get Scheduled"),
+      // Primary CTA used inside the panel for request-mode buttons
+      primaryCta: (config.primary_cta_label || "Get Scheduled"),
       business: config.business_name || "Appointments",
       bookingMode: config.booking_mode || "both",
       services: Array.isArray(config.services) ? config.services : [],
@@ -123,12 +126,15 @@
       <div class="mcm-sba-muted">What would you like to book?</div>
       <div style="margin-top:10px" id="mcm-sba-services"></div>
       <div class="mcm-sba-actions">
-        <button class="mcm-sba-secondary" id="mcm-sba-request">Request a time</button>
+        <button class="mcm-sba-secondary" id="mcm-sba-request">Get Scheduled</button>
       </div>
     `;
 
     const servicesEl = container.querySelector("#mcm-sba-services");
     const requestBtn = container.querySelector("#mcm-sba-request");
+
+    // Match per-client CTA label
+    requestBtn.textContent = theme.primaryCta || "Get Scheduled";
 
     // Hide request button if booking_mode is strictly instant
     if (String(theme.bookingMode).toLowerCase() === "instant") {
@@ -144,7 +150,35 @@
       `;
       b.addEventListener("click", () => {
         postEvent_("service_selected", { service_id: svc.id || "", service_label: svc.label || "" });
-        renderBooking_(container, theme, svc);
+
+        const bookingUrl = String(svc.booking_url || "").trim();
+        const canFallback = svc.request_fallback !== false;
+        const mode = String(theme.bookingMode || "both").toLowerCase();
+
+        // If a booking URL exists, show the embedded calendar/booking iframe
+        if (bookingUrl) {
+          renderBooking_(container, theme, svc);
+          return;
+        }
+
+        // If no booking URL, automatically fall back to request flow (unless disabled / instant-only)
+        if (canFallback && mode !== "instant") {
+          postEvent_("request_mode_open", { service_id: svc.id || "", service_label: svc.label || "" });
+          renderRequestForm_(container, theme, svc);
+          return;
+        }
+
+        // Graceful fallback
+        container.innerHTML = `
+          <div class="mcm-sba-card">
+            <b>${escapeHtml_(svc.label || "Service")}</b><br/>
+            Online booking is not available for this service. Please contact us and we’ll help you get scheduled.
+          </div>
+          <div class="mcm-sba-actions">
+            <button class="mcm-sba-secondary" id="mcm-sba-back">Back</button>
+          </div>
+        `;
+        container.querySelector("#mcm-sba-back").addEventListener("click", () => renderServicePicker_(container, theme));
       });
       servicesEl.appendChild(b);
     });
@@ -166,7 +200,7 @@
       `}
       <div class="mcm-sba-actions">
         <button class="mcm-sba-secondary" id="mcm-sba-back">Back</button>
-        ${canFallback ? `<button class="mcm-sba-primary" id="mcm-sba-request" style="background:${theme.color};color:#fff;">Request a time</button>` : ""}
+        ${canFallback ? `<button class="mcm-sba-primary" id="mcm-sba-request" style="background:${theme.color};color:#fff;">${escapeHtml_(theme.primaryCta || "Get Scheduled")}</button>` : ""}
       </div>
     `;
 
@@ -189,7 +223,7 @@
     const serviceLabel = svc?.label || "";
 
     container.innerHTML = `
-      <div class="mcm-sba-muted"><b>Request a time</b> — we’ll contact you ASAP.</div>
+      <div class="mcm-sba-muted"><b>${escapeHtml_(theme.primaryCta || "Get Scheduled")}</b> — we’ll contact you ASAP.</div>
 
       <div class="mcm-sba-label">Name</div>
       <input class="mcm-sba-input" id="mcm-name" placeholder="Full name" />

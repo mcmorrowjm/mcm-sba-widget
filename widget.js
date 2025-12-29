@@ -107,7 +107,7 @@
       <div class="mcm-sba-header">
         <div>
           <p class="mcm-sba-title">${escapeHtml_(theme.business)}</p>
-          <p class="mcm-sba-sub">Book instantly or request a time — we’ll route it right away.</p>
+          <p class="mcm-sba-sub">Book instantly or get scheduled — we’ll route it right away.</p>
         </div>
         <button class="mcm-sba-close" aria-label="Close">×</button>
       </div>
@@ -135,7 +135,6 @@
 
     // Match per-client CTA label
     requestBtn.textContent = theme.primaryCta || "Get Scheduled";
-
     // Hide request button if booking_mode is strictly instant
     if (String(theme.bookingMode).toLowerCase() === "instant") {
       requestBtn.style.display = "none";
@@ -179,8 +178,7 @@
           </div>
         `;
         container.querySelector("#mcm-sba-back").addEventListener("click", () => renderServicePicker_(container, theme));
-      });
-      servicesEl.appendChild(b);
+      });servicesEl.appendChild(b);
     });
 
     requestBtn.addEventListener("click", () => {
@@ -190,7 +188,7 @@
   }
 
   function renderBooking_(container, theme, svc) {
-    const bookingUrl = svc.booking_url || "";
+    const bookingUrl = String(svc.booking_url || "").trim();
     const canFallback = svc.request_fallback !== false;
 
     container.innerHTML = `
@@ -200,19 +198,28 @@
       `}
       <div class="mcm-sba-actions">
         <button class="mcm-sba-secondary" id="mcm-sba-back">Back</button>
-        ${canFallback ? `<button class="mcm-sba-primary" id="mcm-sba-request" style="background:${theme.color};color:#fff;">${escapeHtml_(theme.primaryCta || "Get Scheduled")}</button>` : ""}
+        <button class="mcm-sba-secondary" id="mcm-sba-done">Done</button>
+        ${canFallback ? `<button class="mcm-sba-primary" id="mcm-sba-request" style="background:${theme.color};color:#fff;">Can’t find a time? ${escapeHtml_(theme.primaryCta || "Get Scheduled")}</button>` : ""}
       </div>
     `;
 
-    postEvent_("booking_viewed", { service_id: svc.id || "", service_label: svc.label || "" });
+    // Track booking view (best-effort; true completion requires provider webhooks)
+    postEvent_("booking_opened", { service_id: svc.id || "", service_label: svc.label || "" });
 
     container.querySelector("#mcm-sba-back").addEventListener("click", () => {
       renderServicePicker_(container, theme);
     });
 
+    container.querySelector("#mcm-sba-done").addEventListener("click", () => {
+      const panel = container.closest("#mcm-sba-panel");
+      const closeBtn = panel && panel.querySelector(".mcm-sba-close");
+      if (closeBtn) closeBtn.click();
+    });
+
     const req = container.querySelector("#mcm-sba-request");
     if (req) {
       req.addEventListener("click", () => {
+        postEvent_("request_fallback_opened", { service_id: svc.id || "", service_label: svc.label || "" });
         renderRequestForm_(container, theme, svc);
       });
     }

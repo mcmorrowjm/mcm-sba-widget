@@ -35,7 +35,10 @@
       business: config.business_name || "Appointments",
       bookingMode: config.booking_mode || "both",
       services: Array.isArray(config.services) ? config.services : [],
+      phone: String(config.business_phone || config.phone_number || config.phone || "").trim(),
     };
+
+    const state = { urgencyKey: "", urgencyLabel: "" };
 
     if (inlineSelector) {
       const mount = document.querySelector(inlineSelector);
@@ -43,15 +46,15 @@
         console.warn("[MCM SBA] Inline mount not found:", inlineSelector);
         return;
       }
-      renderInline_(mount, theme);
+      renderInline_(mount, theme, state);
       postEvent_("widget_render_inline", {});
     } else {
-      renderFloating_(theme);
+      renderFloating_(theme, state);
       postEvent_("widget_render_floating", {});
     }
   }
 
-  function renderFloating_(theme) {
+  function renderFloating_(theme, state) {
     const launcher = document.createElement("div");
     launcher.id = "mcm-sba-launcher";
 
@@ -68,7 +71,7 @@
     overlay.id = "mcm-sba-overlay";
     document.body.appendChild(overlay);
 
-    const panel = buildPanel_(theme);
+    const panel = buildPanel_(theme, { state });
     document.body.appendChild(panel);
 
     const open = () => {
@@ -87,8 +90,8 @@
     panel.querySelector(".mcm-sba-close").addEventListener("click", close);
   }
 
-  function renderInline_(mount, theme) {
-    const panel = buildPanel_(theme, { inline: true });
+  function renderInline_(mount, theme, state) {
+    const panel = buildPanel_(theme, { inline: true, state });
     panel.style.position = "relative";
     panel.style.transform = "none";
     panel.style.height = "auto";
@@ -117,11 +120,55 @@
     `;
 
     const step = panel.querySelector("#mcm-sba-step");
-    renderServicePicker_(step, theme);
+    renderUrgency_(step, theme, opts.state || { urgencyKey:"", urgencyLabel:"" });
     return panel;
   }
 
-  function renderServicePicker_(container, theme) {
+
+  function renderUrgency_(container, theme, state) {
+    container.innerHTML = `
+      <div class="mcm-sba-muted"><b>Quick question</b> — how quickly do you need help?</div>
+      <div class="mcm-sba-actions" style="gap:8px; flex-direction:column; align-items:stretch;">
+        <button class="mcm-sba-btn" id="mcm-sba-urg-today" style="background:${escapeAttr_(theme.color)}; color:#fff;">Today (urgent)</button>
+        <button class="mcm-sba-secondary" id="mcm-sba-urg-week">This week</button>
+        <button class="mcm-sba-secondary" id="mcm-sba-urg-quote">Just looking for pricing</button>
+      </div>
+      <div id="mcm-sba-urg-extra" style="margin-top:10px;"></div>
+    `;
+
+    const setUrgency = (key, label) => {
+      state.urgencyKey = key;
+      state.urgencyLabel = label;
+      postEvent_("urgency_selected", { urgency: key, urgency_label: label });
+
+      // Optional HOT helper: show a call-now button if a phone number exists
+      const extra = container.querySelector("#mcm-sba-urg-extra");
+      if (key === "today" && theme.phone) {
+        extra.innerHTML = `
+          <div class="mcm-sba-card">
+            <b>Urgent request flagged as HOT</b><br/>
+            <span class="mcm-sba-muted">If this is an emergency, call now. Otherwise, continue to get scheduled.</span>
+            <div class="mcm-sba-actions" style="margin-top:10px;">
+              <a class="mcm-sba-btn" href="tel:${escapeAttr_(theme.phone)}" style="background:${escapeAttr_(theme.color)}; color:#fff; text-decoration:none; display:inline-block;">Call now</a>
+              <button class="mcm-sba-secondary" id="mcm-sba-urg-continue">Continue</button>
+            </div>
+          </div>
+        `;
+        container.querySelector("#mcm-sba-urg-continue").addEventListener("click", () => {
+          renderServicePicker_(container, theme, state);
+        });
+        return;
+      }
+
+      renderServicePicker_(container, theme, state);
+    };
+
+    container.querySelector("#mcm-sba-urg-today").addEventListener("click", () => setUrgency("today", "Today (urgent)"));
+    container.querySelector("#mcm-sba-urg-week").addEventListener("click", () => setUrgency("week", "This week"));
+    container.querySelector("#mcm-sba-urg-quote").addEventListener("click", () => setUrgency("quote", "Just looking for pricing"));
+  }
+
+  function renderServicePicker_(container, theme, state) {
     container.innerHTML = `
       <div class="mcm-sba-muted">What would you like to book?</div>
       <div style="margin-top:10px" id="mcm-sba-services"></div>
@@ -156,14 +203,14 @@
 
         // If a booking URL exists, show the embedded calendar/booking iframe
         if (bookingUrl) {
-          renderBooking_(container, theme, svc);
+          renderBooking_(container, theme, svc, state);
           return;
         }
 
         // If no booking URL, automatically fall back to request flow (unless disabled / instant-only)
         if (canFallback && mode !== "instant") {
           postEvent_("request_mode_open", { service_id: svc.id || "", service_label: svc.label || "" });
-          renderRequestForm_(container, theme, svc);
+          renderRequestForm_(container, theme, svc, state);
           return;
         }
 
@@ -183,11 +230,11 @@
 
     requestBtn.addEventListener("click", () => {
       postEvent_("request_mode_open", {});
-      renderRequestForm_(container, theme, null);
+      renderRequestForm_(container, theme, null, state);
     });
   }
 
-  function renderBooking_(container, theme, svc) {
+  function renderBooking_(container, theme, svc, state) {
     const bookingUrl = String(svc.booking_url || "").trim();
     const canFallback = svc.request_fallback !== false;
 
@@ -204,10 +251,10 @@
     `;
 
     // Track booking view (best-effort; true completion requires provider webhooks)
-    postEvent_("booking_opened", { service_id: svc.id || "", service_label: svc.label || "" });
+    postEvent_("booking_opened", { service_id: svc.id || "", service_label: svc.label || "", urgency: state && state.urgencyKey || "", urgency_label: state && state.urgencyLabel || "" });
 
     container.querySelector("#mcm-sba-back").addEventListener("click", () => {
-      renderServicePicker_(container, theme);
+      renderServicePicker_(container, theme, state);
     });
 
     container.querySelector("#mcm-sba-done").addEventListener("click", () => {
@@ -219,18 +266,18 @@
     const req = container.querySelector("#mcm-sba-request");
     if (req) {
       req.addEventListener("click", () => {
-        postEvent_("request_fallback_opened", { service_id: svc.id || "", service_label: svc.label || "" });
-        renderRequestForm_(container, theme, svc);
+        postEvent_("request_fallback_opened", { service_id: svc.id || "", service_label: svc.label || "", urgency: state && state.urgencyKey || "", urgency_label: state && state.urgencyLabel || "" });
+        renderRequestForm_(container, theme, svc, state);
       });
     }
   }
 
-  function renderRequestForm_(container, theme, svc) {
+  function renderRequestForm_(container, theme, svc, state) {
     const serviceId = svc?.id || "";
     const serviceLabel = svc?.label || "";
 
     container.innerHTML = `
-      <div class="mcm-sba-muted"><b>${escapeHtml_(theme.primaryCta || "Get Scheduled")}</b> — we’ll contact you ASAP.</div>
+      <div class="mcm-sba-muted"><b>${escapeHtml_(theme.primaryCta || "Get Scheduled")}</b> — we’ll contact you ASAP.${state && state.urgencyKey === "today" ? ` <span style="display:inline-block;margin-left:6px;padding:2px 8px;border-radius:999px;background:${escapeAttr_(theme.color)};color:#fff;font-size:12px;">HOT</span>` : ""}</div>
 
       <div class="mcm-sba-label">Name</div>
       <input class="mcm-sba-input" id="mcm-name" placeholder="Full name" />
@@ -267,7 +314,7 @@
     `;
 
     container.querySelector("#mcm-back").addEventListener("click", () => {
-      renderServicePicker_(container, theme);
+      renderServicePicker_(container, theme, state);
     });
 
     container.querySelector("#mcm-send").addEventListener("click", async () => {
@@ -284,7 +331,7 @@
       const payload = {
         client_id: clientId,
         session_id: sessionId,
-        intent: "request",
+        intent: (state && state.urgencyKey === "today") ? "urgent" : "request",
         service_id: serviceId,
         service_label: serviceLabel,
         name,
@@ -299,7 +346,7 @@
 
       const res = await postLead_(payload);
       if (res && res.ok) {
-        postEvent_("lead_submitted", { intent: "request", lead_id: res.lead_id || "" });
+        postEvent_("lead_submitted", { intent: (state && state.urgencyKey === "today") ? "urgent" : "request", lead_id: res.lead_id || "" });
         status.textContent = "✅ Sent. We’ll reach out shortly.";
       } else {
         status.textContent = "⚠️ Something went wrong. Please try again.";

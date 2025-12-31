@@ -1,226 +1,270 @@
+/**
+ * widget.css — iOS / Apple "Glassmorphism" Theme
+ */
+
+/* --- Font Reset --- */
+.mcm-sba-reset, #mcm-sba-launcher, #mcm-sba-panel {
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* --- Launcher Button --- */
 #mcm-sba-launcher {
   position: fixed;
-  right: 18px;
-  bottom: 18px;
+  right: 20px;
+  bottom: 20px;
   z-index: 2147483000;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 .mcm-sba-btn {
   border: 0;
-  border-radius: 999px;
-  padding: 12px 16px;
-  font-weight: 700;
+  border-radius: 999px; /* Pill shape */
+  padding: 14px 22px;
+  font-weight: 600;
+  font-size: 15px;
   cursor: pointer;
-  box-shadow: 0 10px 25px rgba(0,0,0,.18);
-  -webkit-tap-highlight-color: transparent;
-  transition: transform .08s ease, filter .12s ease;
+  /* iOS-style drop shadow */
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.04);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
-.mcm-sba-btn:active { transform: scale(.98); }
 
+.mcm-sba-btn:hover {
+  transform: scale(1.02);
+  box-shadow: 0 12px 32px rgba(0,0,0,0.16), 0 4px 12px rgba(0,0,0,0.08);
+}
+
+.mcm-sba-btn:active {
+  transform: scale(0.96);
+}
+
+/* --- Overlay (Backdrop) --- */
 #mcm-sba-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,.35);
+  background: rgba(0,0,0,0.2); /* Subtle dark dim */
+  backdrop-filter: blur(4px);   /* Blur the website behind */
   z-index: 2147483001;
   display: none;
-  -webkit-tap-highlight-color: transparent;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+#mcm-sba-overlay.open {
+  display: block;
+  opacity: 1;
 }
 
+/* --- Main Panel (The Glass Card) --- */
 #mcm-sba-panel {
   position: fixed;
-  left: auto;
-  right: 18px;
-  bottom: 18px;
-  top: auto;
-  height: min(680px, calc(100vh - 36px));
-  width: min(420px, calc(100vw - 36px));
-  background: #fff;
+  bottom: 20px;
+  right: 20px;
+  width: 380px;
+  max-width: calc(100vw - 40px);
+  max-height: calc(100vh - 40px);
   z-index: 2147483002;
-  transform: translateY(110%);
-  transition: transform .22s ease;
-  border: 1px solid rgba(0,0,0,.10);
-  box-shadow: 0 20px 60px rgba(0,0,0,.22);
+  
+  /* Glassmorphism Logic */
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(25px) saturate(180%);
+  -webkit-backdrop-filter: blur(25px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 20px 50px rgba(0,0,0,0.15), 0 4px 12px rgba(0,0,0,0.05);
+  
+  border-radius: 24px; /* Large iOS corners */
   display: flex;
   flex-direction: column;
-  border-radius: 22px;
   overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+  
+  /* Animation State: Hidden */
+  opacity: 0;
+  transform: translateY(20px) scale(0.95);
+  pointer-events: none;
+  transition: 
+    opacity 0.3s ease,
+    transform 0.4s cubic-bezier(0.16, 1, 0.3, 1); /* Apple "Spring" Easing */
 }
 
-#mcm-sba-panel.open { transform: translateY(0%); }
+/* Animation State: Open */
+#mcm-sba-panel.open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
 
-.mcm-sba-grab {
-  height: 18px;
+/* --- Inline Mode Override --- */
+.mcm-sba-inline-panel {
+  position: relative !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 100% !important;
+  box-shadow: none !important;
+  transform: none !important;
+  opacity: 1 !important;
+  background: #fff !important; /* Solid white for inline */
+  border: 1px solid rgba(0,0,0,0.08);
+}
+
+/* --- Header --- */
+.mcm-sba-header {
+  padding: 18px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  background: rgba(255,255,255,0.5);
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+
+.mcm-sba-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #000;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.mcm-sba-sub {
+  font-size: 13px;
+  color: rgba(0,0,0,0.55);
+  margin: 2px 0 0 0;
+  line-height: 1.3;
+}
+
+.mcm-sba-close {
+  background: rgba(0,0,0,0.06);
+  border: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: rgba(0,0,0,0.5);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #fff;
+  transition: background 0.2s;
 }
-.mcm-sba-grab:before {
-  content: "";
-  width: 44px;
-  height: 5px;
-  border-radius: 999px;
-  background: rgba(0,0,0,.16);
-}
+.mcm-sba-close:hover { background: rgba(0,0,0,0.12); color: #000; }
 
-.mcm-sba-header {
-  padding: 10px 14px 10px 14px;
-  border-bottom: 1px solid rgba(0,0,0,.08);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: #fff;
-}
-
-.mcm-sba-title { font-size: 14px; font-weight: 800; margin: 0; }
-.mcm-sba-sub { font-size: 12px; opacity: .75; margin: 2px 0 0 0; }
-
-.mcm-sba-step { font-size: 12px; opacity: .65; margin: 0; }
-
-.mcm-sba-back {
-  border: 0;
-  background: transparent;
-  font-size: 18px;
-  cursor: pointer;
-  line-height: 1;
-  padding: 6px 8px;
-  border-radius: 10px;
-}
-.mcm-sba-back:hover { background: rgba(0,0,0,.05); }
-
-.mcm-sba-close {
-  margin-left: auto;
-  border: 0;
-  background: transparent;
-  font-size: 22px;
-  cursor: pointer;
-  line-height: 1;
-  padding: 6px 10px;
-  border-radius: 10px;
-}
-.mcm-sba-close:hover { background: rgba(0,0,0,.05); }
-
+/* --- Body --- */
 .mcm-sba-body {
-  padding: 12px 14px 14px 14px;
-  overflow: auto;
+  padding: 24px;
+  overflow-y: auto;
   flex: 1;
 }
 
-.mcm-sba-footer {
-  padding: 10px 14px 14px 14px;
-  border-top: 1px solid rgba(0,0,0,.08);
-  background: #fff;
-}
-
-.mcm-sba-card {
-  border: 1px solid rgba(0,0,0,.10);
-  border-radius: 14px;
-  padding: 12px;
-  margin-bottom: 10px;
-}
-
-/* iOS-style list rows */
-.mcm-sba-list {
-  border: 1px solid rgba(0,0,0,.10);
+/* --- Cards / Selectors --- */
+.mcm-sba-service, .mcm-sba-card {
+  background: rgba(255,255,255,0.6);
+  border: 1px solid rgba(0,0,0,0.06);
   border-radius: 16px;
-  overflow: hidden;
-  background: #fff;
-}
-.mcm-sba-rowitem {
-  width: 100%;
-  text-align: left;
-  padding: 14px 14px;
-  border: 0;
-  background: #fff;
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  padding: 16px;
+  margin-bottom: 12px;
+  transition: background 0.2s, transform 0.1s;
   cursor: pointer;
-  font-size: 15px;
-  font-weight: 750;
+  text-align: left;
 }
-.mcm-sba-rowitem + .mcm-sba-rowitem { border-top: 1px solid rgba(0,0,0,.08); }
-.mcm-sba-rowitem:active { background: rgba(0,0,0,.04); }
-.mcm-sba-rowitem .sub { display:block; font-size: 12px; font-weight: 600; opacity: .70; margin-top: 2px; }
-.mcm-sba-rowitem .chev { margin-left: auto; opacity: .35; font-weight: 900; }
+.mcm-sba-service:hover {
+  background: #fff;
+  transform: scale(1.01);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+}
+.mcm-sba-service:active { transform: scale(0.99); }
 
-.mcm-sba-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 10px;
-  border-radius: 999px;
+.mcm-sba-service-title { font-size: 15px; font-weight: 600; color: #000; margin-bottom: 4px; }
+.mcm-sba-service-desc { font-size: 13px; color: rgba(0,0,0,0.6); line-height: 1.4; }
+
+/* --- Inputs (iOS Style: Gray Pills) --- */
+.mcm-sba-label {
   font-size: 12px;
-  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  color: rgba(0,0,0,0.45);
+  margin: 16px 0 6px 4px;
 }
-
-.mcm-sba-service {
-  border: 1px solid rgba(0,0,0,.10);
-  border-radius: 14px;
-  padding: 10px 12px;
-  width: 100%;
-  text-align: left;
-  background: #fff;
-  cursor: pointer;
-}
-
-.mcm-sba-service + .mcm-sba-service { margin-top: 8px; }
-
-.mcm-sba-muted { font-size: 12px; opacity: .75; }
-.mcm-sba-label { font-size: 12px; font-weight: 700; margin: 10px 0 6px; }
 
 .mcm-sba-input {
   width: 100%;
-  box-sizing: border-box;
-  border: 1px solid rgba(0,0,0,.18);
+  background: rgba(118, 118, 128, 0.12); /* iOS System Gray */
+  border: 0;
   border-radius: 10px;
-  padding: 10px 10px;
-  font-size: 14px;
+  padding: 12px 14px;
+  font-size: 16px; /* Prevents zoom on iPhone */
+  color: #000;
+  transition: background 0.2s, box-shadow 0.2s;
+  font-family: inherit;
 }
+.mcm-sba-input:focus {
+  outline: none;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(0,122,255,0.3); /* Focus ring */
+}
+textarea.mcm-sba-input { resize: vertical; min-height: 80px; }
 
-.mcm-sba-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.mcm-sba-actions { display: flex; gap: 8px; margin-top: 10px; }
+/* --- Buttons --- */
+.mcm-sba-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 24px;
+}
 
 .mcm-sba-primary {
-  border: 0;
-  border-radius: 10px;
-  padding: 10px 12px;
-  font-weight: 800;
-  cursor: pointer;
   width: 100%;
+  border: 0;
+  border-radius: 12px;
+  padding: 14px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
-.mcm-sba-primary:disabled { opacity: .55; cursor: not-allowed; }
+.mcm-sba-primary:active { opacity: 0.8; }
 
 .mcm-sba-secondary {
-  border: 1px solid rgba(0,0,0,.18);
-  border-radius: 10px;
-  padding: 10px 12px;
-  font-weight: 700;
-  cursor: pointer;
-  width: 100%;
-  background: #fff;
-}
-
-.mcm-sba-iframe {
-  width: 100%;
-  height: 520px;
+  background: transparent;
+  color: rgba(0,122,255,1); /* iOS Blue */
   border: 0;
-  border-radius: 14px;
-  background: #f7f7f7;
+  padding: 10px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.mcm-sba-secondary:hover { text-decoration: underline; }
+
+/* --- Urgent / Status Styles --- */
+.mcm-sba-urgent-flag {
+  display: inline-block;
+  background: #FF3B30; /* iOS Red */
+  color: white;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: 6px;
+  vertical-align: middle;
 }
 
-@media (max-width: 520px) {
+/* --- Mobile Optimization --- */
+@media (max-width: 480px) {
   #mcm-sba-panel {
-    left: 0;
-    right: 0;
     bottom: 0;
-    width: 100vw;
-    height: 85vh;
-    border-radius: 22px 22px 0 0;
-    border-left: none;
-    border-right: none;
-    border-bottom: none;
+    right: 0;
+    left: 0;
+    width: 100%;
+    max-width: 100%;
+    max-height: 85vh; /* Sheet style */
+    border-radius: 20px 20px 0 0;
+    border-bottom: 0;
   }
-  .mcm-sba-row { grid-template-columns: 1fr; }
 }

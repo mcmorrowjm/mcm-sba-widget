@@ -4,19 +4,17 @@
 
   const clientId = SCRIPT.getAttribute("data-client") || "";
   const apiBase = (SCRIPT.getAttribute("data-api") || "").replace(/\/$/, "");
-  const inlineSelector = SCRIPT.getAttribute("data-inline") || ""; // e.g. "#mcm-sba-inline"
+  const inlineSelector = SCRIPT.getAttribute("data-inline") || ""; 
 
   if (!clientId || !apiBase) {
     console.warn("[MCM SBA] Missing data-client or data-api");
     return;
   }
 
-  const VERSION = "0.1.0";
+  const VERSION = "1.0.0"; // Production Release
   const sessionId = getOrCreateSessionId_();
 
   injectCss_();
-
-  // Boot
   boot_().catch(err => console.error("[MCM SBA] boot error", err));
 
   async function boot_() {
@@ -27,27 +25,25 @@
     }
 
     const theme = {
-      color: config.brand_primary_color || "#111111",
-      // Floating launcher button label (per-client override)
+      color: config.brand_primary_color || "#007AFF", // Default to iOS Blue
       label: (config.primary_cta_label || config.brand_button_label || "Get Scheduled"),
-      // Primary CTA used inside the panel for request-mode buttons
       primaryCta: (config.primary_cta_label || "Get Scheduled"),
       business: config.business_name || "Appointments",
       bookingMode: config.booking_mode || "both",
       services: Array.isArray(config.services) ? config.services : [],
       phone: String(config.business_phone || config.phone_number || config.phone || "").trim(),
+      // NEW: Custom Message Label (e.g. "Where is the leak?")
+      messageLabel: config.message_label 
     };
 
     const state = { urgencyKey: "", urgencyLabel: "" };
 
     if (inlineSelector) {
       const mount = document.querySelector(inlineSelector);
-      if (!mount) {
-        console.warn("[MCM SBA] Inline mount not found:", inlineSelector);
-        return;
+      if (mount) {
+        renderInline_(mount, theme, state);
+        postEvent_("widget_render_inline", {});
       }
-      renderInline_(mount, theme, state);
-      postEvent_("widget_render_inline", {});
     } else {
       renderFloating_(theme, state);
       postEvent_("widget_render_floating", {});
@@ -57,10 +53,13 @@
   function renderFloating_(theme, state) {
     const launcher = document.createElement("div");
     launcher.id = "mcm-sba-launcher";
+    
+    // Add an icon SVG to the button for polish
+    const iconSvg = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>`;
 
     const btn = document.createElement("button");
     btn.className = "mcm-sba-btn";
-    btn.textContent = theme.label;
+    btn.innerHTML = `${iconSvg} <span>${theme.label}</span>`;
     btn.style.background = theme.color;
     btn.style.color = "#fff";
 
@@ -75,32 +74,27 @@
     document.body.appendChild(panel);
 
     const open = () => {
-      overlay.style.display = "block";
+      overlay.classList.add("open");
       panel.classList.add("open");
-      try { document.documentElement.style.overflow = "hidden"; } catch (_) {}
       postEvent_("widget_open", {});
     };
     const close = () => {
-      overlay.style.display = "none";
+      overlay.classList.remove("open");
       panel.classList.remove("open");
-      try { document.documentElement.style.overflow = ""; } catch (_) {}
       postEvent_("widget_close", {});
     };
 
     btn.addEventListener("click", open);
     overlay.addEventListener("click", close);
     panel.querySelector(".mcm-sba-close").addEventListener("click", close);
+    
+    // Public API to open widget
+    window.SBA = { open, close };
   }
 
   function renderInline_(mount, theme, state) {
     const panel = buildPanel_(theme, { inline: true, state });
-    panel.style.position = "relative";
-    panel.style.transform = "none";
-    panel.style.height = "auto";
-    panel.style.width = "100%";
-    panel.style.borderRadius = "18px";
-    panel.style.boxShadow = "0 10px 25px rgba(0,0,0,.10)";
-    panel.classList.add("open");
+    panel.className = "mcm-sba-inline-panel";
     mount.appendChild(panel);
   }
 
@@ -109,87 +103,51 @@
     panel.id = "mcm-sba-panel";
 
     panel.innerHTML = `
-      <div class="mcm-sba-grab" aria-hidden="true"></div>
       <div class="mcm-sba-header">
-        <button class="mcm-sba-back" id="mcm-sba-back" aria-label="Back" style="display:none;">‹</button>
         <div>
-          <p class="mcm-sba-title" id="mcm-sba-title">${escapeHtml_(theme.business)}</p>
-          <p class="mcm-sba-step" id="mcm-sba-stepline">Step 1 of 3</p>
+          <p class="mcm-sba-title">${escapeHtml_(theme.business)}</p>
+          <p class="mcm-sba-sub">Virtual Assistant</p>
         </div>
-        <button class="mcm-sba-close" aria-label="Close">×</button>
+        <button class="mcm-sba-close" aria-label="Close">&times;</button>
       </div>
-      <div class="mcm-sba-body" id="mcm-sba-body"></div>
-      <div class="mcm-sba-footer" id="mcm-sba-footer" style="display:none;"></div>
+      <div class="mcm-sba-body">
+        <div id="mcm-sba-step"></div>
+      </div>
     `;
 
-    const state = opts.state || { urgencyKey:"", urgencyLabel:"" };
-    state._stack = [];
-    const body = panel.querySelector("#mcm-sba-body");
-    const footer = panel.querySelector("#mcm-sba-footer");
-    const backBtn = panel.querySelector("#mcm-sba-back");
-
-    const ui = { panel, body, footer, backBtn };
-    renderUrgency_(ui, theme, state);
+    const step = panel.querySelector("#mcm-sba-step");
+    renderUrgency_(step, theme, opts.state || { urgencyKey:"", urgencyLabel:"" });
     return panel;
   }
 
-  function setHeader_(ui, title, stepText, canBack) {
-    const t = ui.panel.querySelector("#mcm-sba-title");
-    const s = ui.panel.querySelector("#mcm-sba-stepline");
-    if (t) t.textContent = title || "";
-    if (s) s.textContent = stepText || "";
-    if (ui.backBtn) ui.backBtn.style.display = canBack ? "inline-flex" : "none";
-  }
+  function renderUrgency_(container, theme, state) {
+    container.innerHTML = `
+      <div class="mcm-sba-label" style="margin-top:0">Quick Question</div>
+      <div style="font-size:18px; font-weight:700; margin-bottom:16px;">How quickly do you need help?</div>
+      
+      <button class="mcm-sba-card" id="mcm-sba-urg-today" style="width:100%; display:flex; align-items:center; gap:12px;">
+         <div style="background:#FF3B30; width:12px; height:12px; border-radius:50%;"></div>
+         <div>
+           <div class="mcm-sba-service-title">Today (Urgent)</div>
+           <div class="mcm-sba-service-desc">Emergency, stoppage, or leak.</div>
+         </div>
+      </button>
 
-  function pushView_(ui, renderFn) {
-    // Save current body+footer HTML so Back can restore quickly (no re-fetch)
-    ui._prev = ui._prev || [];
-    ui._prev.push({ body: ui.body.innerHTML, footer: ui.footer.innerHTML, footerDisplay: ui.footer.style.display });
-    ui.backBtn.onclick = () => popView_(ui);
-    ui.backBtn.style.display = ui._prev.length ? "inline-flex" : "none";
-    renderFn();
-  }
+      <button class="mcm-sba-card" id="mcm-sba-urg-week" style="width:100%; display:flex; align-items:center; gap:12px;">
+         <div style="background:#34C759; width:12px; height:12px; border-radius:50%;"></div>
+         <div>
+           <div class="mcm-sba-service-title">This Week</div>
+           <div class="mcm-sba-service-desc">Schedule a future appointment.</div>
+         </div>
+      </button>
 
-  function popView_(ui) {
-    ui._prev = ui._prev || [];
-    const prev = ui._prev.pop();
-    if (!prev) return;
-    ui.body.innerHTML = prev.body;
-    ui.footer.innerHTML = prev.footer;
-    ui.footer.style.display = prev.footerDisplay || "none";
-    ui.backBtn.style.display = ui._prev.length ? "inline-flex" : "none";
-  }
-
-  function renderUrgency_(ui, theme, state) {
-    setHeader_(ui, theme.business, "Step 1 of 3", false);
-    ui.footer.style.display = "none";
-
-    ui.body.innerHTML = `
-      <div class="mcm-sba-muted" style="margin-bottom:10px;"><b>Quick question</b> — how quickly do you need help?</div>
-      <div class="mcm-sba-list" role="listbox" aria-label="Urgency">
-        <button class="mcm-sba-rowitem" id="mcm-sba-urg-today" role="option">
-          <div>
-            Urgent — today
-            <span class="sub">System down, security issue, or can’t work</span>
-          </div>
-          <span class="chev">›</span>
-        </button>
-        <button class="mcm-sba-rowitem" id="mcm-sba-urg-week" role="option">
-          <div>
-            This week
-            <span class="sub">Non-urgent support or follow-up</span>
-          </div>
-          <span class="chev">›</span>
-        </button>
-        <button class="mcm-sba-rowitem" id="mcm-sba-urg-quote" role="option">
-          <div>
-            Quote / general question
-            <span class="sub">Pricing, onboarding, or “do you handle…”</span>
-          </div>
-          <span class="chev">›</span>
-        </button>
-      </div>
-      <div id="mcm-sba-urg-extra" style="margin-top:10px;"></div>
+      <button class="mcm-sba-card" id="mcm-sba-urg-quote" style="width:100%; display:flex; align-items:center; gap:12px;">
+         <div style="background:#007AFF; width:12px; height:12px; border-radius:50%;"></div>
+         <div>
+           <div class="mcm-sba-service-title">Pricing / Quote</div>
+           <div class="mcm-sba-service-desc">Just looking for information.</div>
+         </div>
+      </button>
     `;
 
     const setUrgency = (key, label) => {
@@ -197,325 +155,218 @@
       state.urgencyLabel = label;
       postEvent_("urgency_selected", { urgency: key, urgency_label: label });
 
-      // Optional HOT helper: show a call-now button if a phone number exists
-      const extra = ui.body.querySelector("#mcm-sba-urg-extra");
+      // Hot Lead Redirect (Call Option)
       if (key === "today" && theme.phone) {
-        extra.innerHTML = `
-          <div class="mcm-sba-card">
-            <b>Urgent request flagged as HOT</b><br/>
-            <span class="mcm-sba-muted">If this is an emergency, call now. Otherwise, continue to get scheduled.</span>
-            <div class="mcm-sba-actions" style="margin-top:10px;">
-              <a class="mcm-sba-btn" href="tel:${escapeAttr_(theme.phone)}" style="background:${escapeAttr_(theme.color)}; color:#fff; text-decoration:none; display:inline-block;">Call now</a>
-              <button class="mcm-sba-secondary" id="mcm-sba-urg-continue">Continue</button>
-            </div>
-          </div>
-        `;
-        ui.body.querySelector("#mcm-sba-urg-continue").addEventListener("click", () => {
-          renderServicePicker_(ui, theme, state);
-        });
-        return;
+        renderHotInterstital_(container, theme, state);
+      } else {
+        renderServicePicker_(container, theme, state);
       }
-
-      renderServicePicker_(ui, theme, state);
     };
 
-    ui.body.querySelector("#mcm-sba-urg-today").addEventListener("click", () => setUrgency("today", "Urgent — today"));
-    ui.body.querySelector("#mcm-sba-urg-week").addEventListener("click", () => setUrgency("week", "This week"));
-    ui.body.querySelector("#mcm-sba-urg-quote").addEventListener("click", () => setUrgency("quote", "Quote / general question"));
+    container.querySelector("#mcm-sba-urg-today").addEventListener("click", () => setUrgency("today", "Today (urgent)"));
+    container.querySelector("#mcm-sba-urg-week").addEventListener("click", () => setUrgency("week", "This week"));
+    container.querySelector("#mcm-sba-urg-quote").addEventListener("click", () => setUrgency("quote", "Just looking for pricing"));
   }
 
-  function renderServicePicker_(ui, theme, state) {
-    setHeader_(ui, theme.business, "Step 2 of 3", true);
-
-    pushView_(ui, () => {
-      ui.body.innerHTML = `
-        <div class="mcm-sba-muted" style="margin-bottom:10px;">Choose what you need help with:</div>
-        <div id="mcm-sba-services"></div>
-      `;
-
-      ui.footer.style.display = "block";
-      ui.footer.innerHTML = `
-        <div class="mcm-sba-muted" style="margin-bottom:8px;">Not sure which option fits?</div>
-        <button class="mcm-sba-primary" id="mcm-sba-request" style="background:${escapeAttr_(theme.color)}; color:#fff;">${escapeHtml_(theme.primaryCta || "Get Scheduled")}</button>
-      `;
-
-      const servicesEl = ui.body.querySelector("#mcm-sba-services");
-      const requestBtn = ui.footer.querySelector("#mcm-sba-request");
-
-      // Hide request button if booking_mode is strictly instant
-      if (String(theme.bookingMode).toLowerCase() === "instant") {
-        requestBtn.style.display = "none";
-        ui.footer.style.display = "none";
-      }
-
-      theme.services.forEach(svc => {
-        const b = document.createElement("button");
-        b.className = "mcm-sba-rowitem";
-        b.innerHTML = `
-          <div>
-            ${escapeHtml_(svc.label || "Service")}
-            <span class="sub">${escapeHtml_(svc.description || "")}</span>
-          </div>
-          <span class="chev">›</span>
-        `;
-        b.addEventListener("click", () => {
-        postEvent_("service_selected", { service_id: svc.id || "", service_label: svc.label || "" });
-
-        const bookingUrl = String(svc.booking_url || "").trim();
-        const canFallback = svc.request_fallback !== false;
-        const mode = String(theme.bookingMode || "both").toLowerCase();
-
-        // If a booking URL exists, show the embedded calendar/booking iframe
-        if (bookingUrl) {
-          renderBooking_(ui, theme, svc, state);
-          return;
-        }
-
-        // If no booking URL, automatically fall back to request flow (unless disabled / instant-only)
-        if (canFallback && mode !== "instant") {
-          postEvent_("request_mode_open", { service_id: svc.id || "", service_label: svc.label || "" });
-          renderRequestForm_(ui, theme, svc, state);
-          return;
-        }
-
-        // Graceful fallback
-        ui.body.innerHTML = `
-          <div class="mcm-sba-card">
-            <b>${escapeHtml_(svc.label || "Service")}</b><br/>
-            Online booking is not available for this service. Please contact us and we’ll help you get scheduled.
-          </div>
-        `;
-        ui.footer.style.display = "block";
-        ui.footer.innerHTML = `<button class="mcm-sba-secondary" id="mcm-sba-back2">Back</button>`;
-        ui.footer.querySelector("#mcm-sba-back2").addEventListener("click", () => popView_(ui));
-      });
-        servicesEl.appendChild(b);
-      });
-
-      requestBtn.addEventListener("click", () => {
-        postEvent_("request_mode_open", {});
-        renderRequestForm_(ui, theme, null, state);
-      });
-    });
+  function renderHotInterstital_(container, theme, state) {
+    container.innerHTML = `
+      <div style="text-align:center; padding: 20px 0;">
+        <div style="font-size:40px; margin-bottom:10px;">🔥</div>
+        <h3 style="margin:0 0 10px 0;">This sounds urgent.</h3>
+        <p style="color:rgba(0,0,0,0.6); margin-bottom:24px;">For fastest service, we recommend calling now.</p>
+        
+        <a href="tel:${escapeAttr_(theme.phone)}" class="mcm-sba-primary" style="background:#34C759; color:#fff; text-decoration:none; margin-bottom:12px;">
+          Call Now (${escapeHtml_(theme.phone)})
+        </a>
+        <button class="mcm-sba-secondary" id="mcm-sba-continue">No, I prefer to book online</button>
+      </div>
+    `;
+    container.querySelector("#mcm-sba-continue").addEventListener("click", () => renderServicePicker_(container, theme, state));
   }
 
-  function renderBooking_(ui, theme, svc, state) {
-    setHeader_(ui, theme.business, "Step 3 of 3", true);
-    const bookingUrl = String(svc.booking_url || "").trim();
-    const canFallback = svc.request_fallback !== false;
-
-    pushView_(ui, () => {
-      ui.body.innerHTML = `
-      <div class="mcm-sba-muted" style="margin-bottom:10px;"><b>${escapeHtml_(svc.label || "Booking")}</b></div>
-      ${bookingUrl ? `<iframe class="mcm-sba-iframe" src="${escapeAttr_(bookingUrl)}" loading="lazy"></iframe>` : `
-        <div class="mcm-sba-card">No booking link is configured for this service.</div>
-      `}
+  function renderServicePicker_(container, theme, state) {
+    container.innerHTML = `
+      <div class="mcm-sba-label" style="margin-top:0">Services</div>
+      <div style="font-size:18px; font-weight:700; margin-bottom:16px;">What do you need?</div>
+      <div id="mcm-sba-services"></div>
+      
+      <div class="mcm-sba-actions">
+        <button class="mcm-sba-secondary" id="mcm-sba-back">Back</button>
+      </div>
     `;
 
-      ui.footer.style.display = "block";
-      ui.footer.innerHTML = `
-        <div class="mcm-sba-actions" style="margin-top:0;">
-          <button class="mcm-sba-secondary" id="mcm-sba-done">Done</button>
-          ${canFallback ? `<button class="mcm-sba-primary" id="mcm-sba-request" style="background:${escapeAttr_(theme.color)};color:#fff;">Can’t find a time? ${escapeHtml_(theme.primaryCta || "Get Scheduled")}</button>` : ""}
-        </div>
+    const list = container.querySelector("#mcm-sba-services");
+    const mode = String(theme.bookingMode || "both").toLowerCase();
+
+    theme.services.forEach(svc => {
+      const b = document.createElement("div");
+      b.className = "mcm-sba-service";
+      b.innerHTML = `
+        <div class="mcm-sba-service-title">${escapeHtml_(svc.label || "Service")}</div>
+        <div class="mcm-sba-service-desc">${escapeHtml_(svc.description || "")}</div>
       `;
-
-    // Track booking view (best-effort; true completion requires provider webhooks)
-    postEvent_("booking_opened", { service_id: svc.id || "", service_label: svc.label || "", urgency: state && state.urgencyKey || "", urgency_label: state && state.urgencyLabel || "" });
-
-    const done = ui.footer.querySelector("#mcm-sba-done");
-    if (done) done.addEventListener("click", () => {
-      const closeBtn = ui.panel.querySelector(".mcm-sba-close");
-      if (closeBtn) closeBtn.click();
-    });
-
-    const req = ui.footer.querySelector("#mcm-sba-request");
-    if (req) {
-      req.addEventListener("click", () => {
-        postEvent_("request_fallback_opened", { service_id: svc.id || "", service_label: svc.label || "", urgency: state && state.urgencyKey || "", urgency_label: state && state.urgencyLabel || "" });
-        renderRequestForm_(ui, theme, svc, state);
+      b.addEventListener("click", () => {
+        postEvent_("service_selected", { service_id: svc.id, service_label: svc.label });
+        const url = String(svc.booking_url || "").trim();
+        
+        if (url) {
+          renderBooking_(container, theme, svc, state);
+        } else if (mode !== "instant") {
+          renderRequestForm_(container, theme, svc, state);
+        } else {
+           // Fallback for instant-only mode with no link
+           alert("Online booking not available for this service. Please call us.");
+        }
       });
+      list.appendChild(b);
+    });
+    
+    // Optional "General Request" button at bottom
+    if (mode !== "instant") {
+      const gen = document.createElement("div");
+      gen.className = "mcm-sba-service";
+      gen.style.background = "transparent"; 
+      gen.style.border = "1px dashed rgba(0,0,0,0.2)";
+      gen.innerHTML = `<div class="mcm-sba-service-title" style="text-align:center; color:rgba(0,0,0,0.5);">Something else?</div>`;
+      gen.addEventListener("click", () => renderRequestForm_(container, theme, null, state));
+      list.appendChild(gen);
     }
-    });
+
+    container.querySelector("#mcm-sba-back").addEventListener("click", () => renderUrgency_(container, theme, state));
   }
 
-  function renderRequestForm_(ui, theme, svc, state) {
-    setHeader_(ui, theme.business, "Step 3 of 3", true);
-    const serviceId = svc?.id || "";
-    const serviceLabel = svc?.label || "";
+  function renderBooking_(container, theme, svc, state) {
+    const url = svc.booking_url;
+    container.innerHTML = `
+      <div style="height:100%; display:flex; flex-direction:column;">
+         <iframe src="${escapeAttr_(url)}" style="flex:1; width:100%; border:0; border-radius:12px; background:#f9f9f9;" loading="lazy"></iframe>
+         <div class="mcm-sba-actions">
+           <button class="mcm-sba-secondary" id="mcm-sba-back">Back</button>
+           <button class="mcm-sba-secondary" id="mcm-sba-fallback">Can't find a time?</button>
+         </div>
+      </div>
+    `;
+    container.querySelector("#mcm-sba-back").addEventListener("click", () => renderServicePicker_(container, theme, state));
+    container.querySelector("#mcm-sba-fallback").addEventListener("click", () => renderRequestForm_(container, theme, svc, state));
+  }
 
-    pushView_(ui, () => {
-    ui.body.innerHTML = `
-      <div class="mcm-sba-muted" style="margin-bottom:10px;">
-        <b>${escapeHtml_(theme.primaryCta || "Get Scheduled")}</b> — we’ll contact you ASAP.
-        ${state && state.urgencyKey === "today" ? ` <span class="mcm-sba-pill" style="background:${escapeAttr_(theme.color)};color:#fff;">HOT</span>` : ""}
+  function renderRequestForm_(container, theme, svc, state) {
+    const isUrgent = state.urgencyKey === "today";
+    const label = svc ? svc.label : "General Request";
+
+    container.innerHTML = `
+      <div class="mcm-sba-label" style="margin-top:0">
+        ${isUrgent ? '<span class="mcm-sba-urgent-flag">HOT LEAD</span>' : "Request"}
+      </div>
+      <div style="font-size:18px; font-weight:700; margin-bottom:16px;">
+        ${escapeHtml_(theme.primaryCta)}
       </div>
 
-      <div class="mcm-sba-label">Name</div>
-      <input class="mcm-sba-input" id="mcm-name" placeholder="Full name" />
-
+      <div class="mcm-sba-label">Contact Info</div>
+      <input class="mcm-sba-input" id="mcm-name" placeholder="Full Name" />
+      <div style="height:10px"></div>
       <div class="mcm-sba-row">
-        <div>
-          <div class="mcm-sba-label">Email</div>
-          <input class="mcm-sba-input" id="mcm-email" placeholder="you@email.com" />
-        </div>
-        <div>
-          <div class="mcm-sba-label">Phone</div>
-          <input class="mcm-sba-input" id="mcm-phone" placeholder="(707) 555-1212" />
-        </div>
+        <input class="mcm-sba-input" id="mcm-phone" placeholder="Phone (Mobile)" type="tel" />
+        <input class="mcm-sba-input" id="mcm-email" placeholder="Email" type="email" />
       </div>
 
-      <div class="mcm-sba-label">Preferred time</div>
-      <input class="mcm-sba-input" id="mcm-time" placeholder="Tomorrow afternoon / ASAP / next week" />
+      <div class="mcm-sba-label">Timing</div>
+      <input class="mcm-sba-input" id="mcm-time" placeholder="When do you need this?" value="${isUrgent ? 'ASAP / Emergency' : ''}" />
 
-      <div class="mcm-sba-label">What’s going on?</div>
-      <textarea class="mcm-sba-input" id="mcm-msg" rows="4" placeholder="Quick details help us route this properly"></textarea>
+      <div class="mcm-sba-label">${escapeHtml_(theme.messageLabel || "What's going on?")}</div>
+      <textarea class="mcm-sba-input" id="mcm-msg" placeholder="Please describe the issue..."></textarea>
 
-      <!-- Honeypot (spam trap): keep hidden -->
-      <div style="position:absolute;left:-5000px;top:auto;width:1px;height:1px;overflow:hidden;">
-        <label>Company website</label>
-        <input id="mcm-hp" />
-      </div>
+      <input id="mcm-hp" style="position:absolute; opacity:0; pointer-events:none; width:1px; height:1px;" tabindex="-1" />
 
-      <div class="mcm-sba-muted" id="mcm-status" style="margin-top:10px;"></div>
-    `;
-
-    ui.footer.style.display = "block";
-    ui.footer.innerHTML = `
-      <div class="mcm-sba-actions" style="margin-top:0;">
+      <div class="mcm-sba-actions">
+        <button class="mcm-sba-primary" id="mcm-send" style="background:${theme.color}; color:#fff;">
+          Send Request
+        </button>
         <button class="mcm-sba-secondary" id="mcm-back">Back</button>
-        <button class="mcm-sba-primary" id="mcm-send" style="background:${escapeAttr_(theme.color)};color:#fff;">Send request</button>
       </div>
+      <div id="mcm-status" style="margin-top:10px; font-size:13px; text-align:center; color:rgba(0,0,0,0.5);"></div>
     `;
 
-    ui.footer.querySelector("#mcm-back").addEventListener("click", () => popView_(ui));
-
-    ui.footer.querySelector("#mcm-send").addEventListener("click", async () => {
-      const name = val_("#mcm-name");
-      const email = val_("#mcm-email");
-      const phone = val_("#mcm-phone");
-      const preferred_time = val_("#mcm-time");
-      const message = val_("#mcm-msg");
-      const hp = val_("#mcm-hp");
-
-      const status = ui.body.querySelector("#mcm-status");
-      const sendBtn = ui.footer.querySelector("#mcm-send");
-      if (sendBtn) {
-        sendBtn.disabled = true;
-        sendBtn.textContent = "Sending…";
-      }
-      status.textContent = "";
-
+    container.querySelector("#mcm-back").addEventListener("click", () => renderServicePicker_(container, theme, state));
+    
+    container.querySelector("#mcm-send").addEventListener("click", async (e) => {
+      const btn = e.target;
+      btn.disabled = true;
+      btn.textContent = "Sending...";
+      
       const payload = {
         client_id: clientId,
         session_id: sessionId,
-        intent: (state && state.urgencyKey === "today") ? "urgent" : "request",
-        service_id: serviceId,
-        service_label: serviceLabel,
-        name,
-        email,
-        phone,
-        preferred_time,
-        message,
-        company_website: hp,
+        intent: isUrgent ? "urgent" : "request",
+        service_id: svc ? svc.id : "",
+        service_label: label,
+        name: val_("#mcm-name"),
+        email: val_("#mcm-email"),
+        phone: val_("#mcm-phone"),
+        preferred_time: val_("#mcm-time"),
+        message: val_("#mcm-msg"),
+        company_website: val_("#mcm-hp"),
         source_url: location.href,
         referrer: document.referrer || ""
       };
 
       const res = await postLead_(payload);
       if (res && res.ok) {
-        postEvent_("lead_submitted", { intent: (state && state.urgencyKey === "today") ? "urgent" : "request", lead_id: res.lead_id || "" });
-        renderSuccess_(ui, theme, {
-          hot: (state && state.urgencyKey === "today"),
-          serviceLabel,
-          phone
+        container.innerHTML = `
+          <div style="text-align:center; padding:40px 20px;">
+            <div style="font-size:48px; margin-bottom:16px;">✅</div>
+            <h3 style="margin:0;">Request Sent!</h3>
+            <p style="color:rgba(0,0,0,0.6);">We have received your details and will contact you shortly.</p>
+            <button class="mcm-sba-secondary" id="mcm-close-final">Close</button>
+          </div>
+        `;
+        container.querySelector("#mcm-close-final").addEventListener("click", () => {
+           const overlay = document.querySelector("#mcm-sba-overlay");
+           if(overlay) overlay.click();
         });
       } else {
-        status.textContent = "⚠️ Something went wrong. Please try again.";
-        if (sendBtn) {
-          sendBtn.disabled = false;
-          sendBtn.textContent = "Send request";
-        }
+        btn.disabled = false;
+        btn.textContent = "Try Again";
+        container.querySelector("#mcm-status").textContent = "Error sending. Please call us directly.";
       }
-    });
-    });
-  }
-
-  function renderSuccess_(ui, theme, meta) {
-    setHeader_(ui, theme.business, "Done", true);
-    ui.body.innerHTML = `
-      <div class="mcm-sba-card" style="text-align:center; padding:16px;">
-        <div style="font-size:34px; line-height:1;">✅</div>
-        <div style="font-weight:900; margin-top:8px;">Request received</div>
-        <div class="mcm-sba-muted" style="margin-top:6px;">We’ll reach out ${meta.hot ? "ASAP" : "soon"}.</div>
-      </div>
-      <div class="mcm-sba-card">
-        <div class="mcm-sba-muted" style="margin-bottom:6px;">Summary</div>
-        <div><b>Type:</b> ${meta.hot ? "Urgent" : "Request"}</div>
-        ${meta.serviceLabel ? `<div style="margin-top:4px;"><b>Service:</b> ${escapeHtml_(meta.serviceLabel)}</div>` : ""}
-        ${meta.phone ? `<div style="margin-top:4px;"><b>Phone:</b> ${escapeHtml_(meta.phone)}</div>` : ""}
-      </div>
-    `;
-    ui.footer.style.display = "block";
-    ui.footer.innerHTML = `
-      <button class="mcm-sba-primary" id="mcm-done" style="background:${escapeAttr_(theme.color)}; color:#fff;">Done</button>
-      <div class="mcm-sba-muted" style="margin-top:10px; text-align:center;">
-        <a href="#" id="mcm-again" style="color:inherit;">Submit another request</a>
-      </div>
-    `;
-    ui.footer.querySelector("#mcm-done").addEventListener("click", () => {
-      const closeBtn = ui.panel.querySelector(".mcm-sba-close");
-      if (closeBtn) closeBtn.click();
-    });
-    ui.footer.querySelector("#mcm-again").addEventListener("click", (e) => {
-      e.preventDefault();
-      // Reset view stack and start over, keep urgency empty
-      ui._prev = [];
-      renderUrgency_(ui, theme, { urgencyKey:"", urgencyLabel:"" });
     });
   }
 
   async function getConfig_(client) {
-    const url = `${apiBase}?action=config&client=${encodeURIComponent(client)}`;
-    const r = await fetch(url, { method: "GET" });
-    return await r.json();
+    try {
+      const res = await fetch(`${apiBase}?action=config&client=${encodeURIComponent(client)}`);
+      return await res.json();
+    } catch (e) { return null; }
   }
 
-  async function postEvent_(event_name, meta) {
+  async function postLead_(payload) {
     try {
-      const url = `${apiBase}?action=event`;
-      await fetch(url, {
+      const res = await fetch(`${apiBase}?action=lead`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      return await res.json();
+    } catch (e) { return { ok: false }; }
+  }
+
+  async function postEvent_(name, meta) {
+    try {
+      fetch(`${apiBase}?action=event`, {
+        method: "POST",
         body: JSON.stringify({
           client_id: clientId,
           session_id: sessionId,
-          event_name,
-          service_id: meta?.service_id || "",
-          meta: { ...meta, v: VERSION },
-          source_url: location.href,
-          referrer: document.referrer || ""
+          event_name: name,
+          meta: meta,
+          source_url: location.href
         })
       });
     } catch (_) {}
   }
 
-  async function postLead_(payload) {
-    try {
-      const url = `${apiBase}?action=lead`;
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      return await r.json();
-    } catch (_) {
-      return { ok: false };
-    }
-  }
-
   function injectCss_() {
-    const href = SCRIPT.getAttribute("data-css") || "";
+    const s = SCRIPT;
+    const href = s.getAttribute("data-css");
     if (href) {
       const link = document.createElement("link");
       link.rel = "stylesheet";
@@ -523,41 +374,34 @@
       document.head.appendChild(link);
       return;
     }
-
-    // Default assumes widget.css is alongside widget.js
-    const jsUrl = new URL(SCRIPT.src);
-    jsUrl.pathname = jsUrl.pathname.replace(/widget\.js$/, "widget.css");
+    // Auto-detect CSS if not provided
+    const url = new URL(s.src);
+    url.pathname = url.pathname.replace(/\.js$/, ".css");
     const link = document.createElement("link");
     link.rel = "stylesheet";
-    link.href = jsUrl.toString();
+    link.href = url.toString();
     document.head.appendChild(link);
   }
 
   function getOrCreateSessionId_() {
-    const key = "mcm_sba_session_id";
-    try {
-      const existing = localStorage.getItem(key);
-      if (existing) return existing;
-      const sid = "s_" + Math.random().toString(16).slice(2) + Date.now().toString(16);
-      localStorage.setItem(key, sid);
-      return sid;
-    } catch (_) {
-      return "s_" + Math.random().toString(16).slice(2);
+    const k = "mcm_sba_sid";
+    let sid = localStorage.getItem(k);
+    if (!sid) {
+      sid = "s_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem(k, sid);
     }
+    return sid;
   }
 
   function val_(sel) {
     const el = document.querySelector(sel);
-    return el ? String(el.value || "").trim() : "";
+    return el ? el.value.trim() : "";
   }
 
-  function escapeHtml_(s) {
-    return String(s || "").replace(/[&<>"']/g, c => ({
-      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-    }[c]));
+  function escapeHtml_(str) {
+    return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
-
-  function escapeAttr_(s) {
-    return String(s || "").replace(/"/g, "%22");
+  function escapeAttr_(str) {
+    return String(str || "").replace(/"/g, "&quot;");
   }
 })();

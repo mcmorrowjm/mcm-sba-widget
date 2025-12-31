@@ -1,5 +1,5 @@
 /**
- * widget.css — iOS / Apple "Glassmorphism" Theme
+ * widget.css — iOS / Apple "Glassmorphism" Theme + Calendly Fix
  */
 
 /* --- Font Reset --- */
@@ -128,7 +128,7 @@
   letter-spacing: -0.01em;
 }
 
-.mcm-sba-sub {
+.mcm-sba-step {
   font-size: 13px;
   color: rgba(0,0,0,0.55);
   margin: 2px 0 0 0;
@@ -152,35 +152,82 @@
 }
 .mcm-sba-close:hover { background: rgba(0,0,0,0.12); color: #000; }
 
+.mcm-sba-back {
+  background: transparent;
+  border: 0;
+  font-size: 24px;
+  color: #007AFF;
+  cursor: pointer;
+  margin-right: 8px;
+  line-height: 1;
+  padding: 0;
+  font-weight: 300;
+}
+
 /* --- Body --- */
 .mcm-sba-body {
   padding: 24px;
   overflow-y: auto;
+  overflow-x: hidden; /* Prevent horizontal scroll */
   flex: 1;
 }
 
-/* --- Cards / Selectors --- */
-.mcm-sba-service, .mcm-sba-card {
-  background: rgba(255,255,255,0.6);
-  border: 1px solid rgba(0,0,0,0.06);
-  border-radius: 16px;
+/* --- List Items / Cards --- */
+.mcm-sba-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0; /* iOS list has no gap, uses borders */
+  background: rgba(255,255,255,0.5);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.mcm-sba-rowitem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(0,0,0,0.08);
   padding: 16px;
-  margin-bottom: 12px;
-  transition: background 0.2s, transform 0.1s;
-  cursor: pointer;
   text-align: left;
+  cursor: pointer;
+  font-size: 16px;
+  color: #000;
+  transition: background 0.2s;
 }
-.mcm-sba-service:hover {
-  background: #fff;
-  transform: scale(1.01);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+.mcm-sba-rowitem:last-child { border-bottom: 0; }
+.mcm-sba-rowitem:hover { background: rgba(255,255,255,0.8); }
+.mcm-sba-rowitem:active { background: rgba(0,0,0,0.05); }
+
+.mcm-sba-rowitem .sub {
+  display: block;
+  font-size: 13px;
+  color: rgba(0,0,0,0.55);
+  margin-top: 2px;
+  font-weight: 400;
 }
-.mcm-sba-service:active { transform: scale(0.99); }
+.mcm-sba-rowitem .chev {
+  color: rgba(0,0,0,0.3);
+  font-size: 20px;
+  font-weight: 400;
+}
 
-.mcm-sba-service-title { font-size: 15px; font-weight: 600; color: #000; margin-bottom: 4px; }
-.mcm-sba-service-desc { font-size: 13px; color: rgba(0,0,0,0.6); line-height: 1.4; }
+.mcm-sba-card {
+  background: rgba(255,255,255,0.6);
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid rgba(0,0,0,0.05);
+  margin-bottom: 12px;
+}
 
-/* --- Inputs (iOS Style: Gray Pills) --- */
+/* --- Typography Helpers --- */
+.mcm-sba-muted {
+  font-size: 14px;
+  color: rgba(0,0,0,0.55);
+}
+
 .mcm-sba-label {
   font-size: 12px;
   text-transform: uppercase;
@@ -190,30 +237,44 @@
   margin: 16px 0 6px 4px;
 }
 
+/* --- Inputs (iOS Pills) --- */
 .mcm-sba-input {
   width: 100%;
   background: rgba(118, 118, 128, 0.12); /* iOS System Gray */
   border: 0;
   border-radius: 10px;
   padding: 12px 14px;
-  font-size: 16px; /* Prevents zoom on iPhone */
+  font-size: 16px; 
   color: #000;
   transition: background 0.2s, box-shadow 0.2s;
   font-family: inherit;
+  margin-bottom: 8px;
 }
 .mcm-sba-input:focus {
   outline: none;
   background: #fff;
-  box-shadow: 0 0 0 2px rgba(0,122,255,0.3); /* Focus ring */
+  box-shadow: 0 0 0 2px rgba(0,122,255,0.3);
 }
 textarea.mcm-sba-input { resize: vertical; min-height: 80px; }
 
-/* --- Buttons --- */
+/* Form Row Helper */
+.mcm-sba-row {
+  display: flex;
+  gap: 10px;
+}
+.mcm-sba-row > * { flex: 1; }
+
+/* --- Footer / Actions --- */
+.mcm-sba-footer {
+  padding: 16px 24px;
+  background: rgba(255,255,255,0.5);
+  border-top: 1px solid rgba(0,0,0,0.06);
+}
+
 .mcm-sba-actions {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 24px;
 }
 
 .mcm-sba-primary {
@@ -228,31 +289,43 @@ textarea.mcm-sba-input { resize: vertical; min-height: 80px; }
   display: flex;
   justify-content: center;
   align-items: center;
+  text-align: center;
 }
 .mcm-sba-primary:active { opacity: 0.8; }
 
 .mcm-sba-secondary {
   background: transparent;
-  color: rgba(0,122,255,1); /* iOS Blue */
+  color: #007AFF;
   border: 0;
   padding: 10px;
   font-size: 15px;
   font-weight: 500;
   cursor: pointer;
+  width: 100%;
 }
 .mcm-sba-secondary:hover { text-decoration: underline; }
 
-/* --- Urgent / Status Styles --- */
-.mcm-sba-urgent-flag {
+.mcm-sba-pill {
   display: inline-block;
-  background: #FF3B30; /* iOS Red */
-  color: white;
-  padding: 2px 8px;
-  border-radius: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
   font-size: 11px;
   font-weight: 700;
-  margin-left: 6px;
   vertical-align: middle;
+  margin-left: 4px;
+}
+
+/* --- FIX: Calendly Iframe --- */
+.mcm-sba-iframe {
+  width: calc(100% + 48px) !important; /* Force bleed: 100% + left pad + right pad */
+  margin-left: -24px !important;       /* Pull left to edge */
+  height: 600px !important;            /* Force height */
+  border: 0;
+  display: block;
+  background: #f9f9f9;
+  /* Flush bottom corners */
+  border-bottom-left-radius: 24px;
+  border-bottom-right-radius: 24px;
 }
 
 /* --- Mobile Optimization --- */

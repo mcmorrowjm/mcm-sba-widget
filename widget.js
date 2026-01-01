@@ -11,9 +11,10 @@
     return;
   }
 
-  const VERSION = "1.9.1"; // INDEX-BASED LOOKUP (Universal/Future-Proof)
-  const sessionId = getOrCreateSessionId_();
+  // --- VERSION 2.1.0 (Direct Map Lookup) ---
+  console.log("[MCM SBA] Widget v2.1.0 Loaded");
 
+  const sessionId = getOrCreateSessionId_();
   injectCss_();
   boot_().catch(err => console.error("[MCM SBA] boot error", err));
 
@@ -31,9 +32,14 @@
       phone: String(config.business_phone || config.phone_number || config.phone || "").trim(),
     };
 
-    // ASSIGN INDEXES: This makes the widget "Future Proof" for any client list
+    // 1. CREATE A SERVICE MAP (The "Dictionary")
+    // This creates a reliable way to look up services by a clean ID string
+    const serviceMap = {};
     theme.services.forEach((s, i) => {
-        s._idx = i; // Save the position (0, 1, 2...)
+        // Generate a safe ID if missing
+        const safeId = (s.id !== undefined && s.id !== null) ? String(s.id) : ("svc_" + i);
+        s._safeId = safeId; // Store it on the object
+        serviceMap[safeId] = s; // Add to dictionary
     });
 
     const state = { 
@@ -44,16 +50,16 @@
     if (inlineSelector) {
       const mount = document.querySelector(inlineSelector);
       if (mount) {
-        renderInline_(mount, theme, state);
+        renderInline_(mount, theme, state, serviceMap);
         postEvent_("widget_render_inline", {});
       }
     } else {
-      renderFloating_(theme, state);
+      renderFloating_(theme, state, serviceMap);
       postEvent_("widget_render_floating", {});
     }
   }
 
-  function renderFloating_(theme, state) {
+  function renderFloating_(theme, state, serviceMap) {
     const launcher = document.createElement("div");
     launcher.id = "mcm-sba-launcher";
     const iconSvg = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>`;
@@ -72,7 +78,7 @@
     panel.id = "mcm-sba-panel";
     document.body.appendChild(panel);
 
-    const ui = bindPanelLogic_(panel, theme, state);
+    const ui = bindPanelLogic_(panel, theme, state, serviceMap);
 
     const toggle = (isOpen) => {
         const method = isOpen ? "add" : "remove";
@@ -88,16 +94,16 @@
     ui.render();
   }
 
-  function renderInline_(mount, theme, state) {
+  function renderInline_(mount, theme, state, serviceMap) {
     const panel = document.createElement("div");
     panel.id = "mcm-sba-panel";
     panel.className = "mcm-sba-inline-panel";
     mount.appendChild(panel);
-    const ui = bindPanelLogic_(panel, theme, state);
+    const ui = bindPanelLogic_(panel, theme, state, serviceMap);
     ui.render();
   }
 
-  function bindPanelLogic_(panel, theme, state) {
+  function bindPanelLogic_(panel, theme, state, serviceMap) {
     panel.innerHTML = `
       <div class="mcm-sba-header">
         <button class="mcm-sba-back" style="display:none;">‹</button>
@@ -140,61 +146,72 @@
         if (!btn) return;
 
         const action = btn.dataset.action;
-        const payload = btn.dataset.payload; // This is a STRING
+        const payload = btn.dataset.payload; // This is the ID string
 
-        if (action === "back") {
-            if (state.stack.length > 1) state.stack.pop();
-            render();
-        } 
-        else if (action === "urgency") {
-            state.data.urgency = payload; 
-            
-            if (payload === "today") {
-                state.data.urgencyLabel = "Urgent";
-                state.stack.push("request"); // Direct to Form
-            }
-            else if (payload === "week") {
-                state.data.urgencyLabel = "Standard";
-                state.stack.push("services");
-            }
-            else if (payload === "quote") {
-                state.data.urgencyLabel = "Quote";
-                state.stack.push("request");
-            }
-            render();
-        }
-        else if (action === "select-service") {
-            // ROBUST LOOKUP: Use Index Position
-            const idx = parseInt(payload, 10);
-            const svc = theme.services[idx];
-            
-            state.data.service = svc || null;
-            state.data.serviceLabel = svc ? svc.label : "General";
-            postEvent_("service_selected", { service_id: svc ? svc.id : "" });
+        console.log("[MCM SBA] Action:", action, "Payload:", payload);
 
-            // Logic: Has Calendar -> Booking. No Calendar -> Request.
-            if (svc && svc.booking_url) {
-                state.stack.push("booking");
-            } else {
-                state.stack.push("request");
+        try {
+            if (action === "back") {
+                if (state.stack.length > 1) state.stack.pop();
+                render();
+            } 
+            else if (action === "urgency") {
+                state.data.urgency = payload; 
+                
+                if (payload === "today") {
+                    state.data.urgencyLabel = "Urgent";
+                    state.stack.push("request"); 
+                }
+                else if (payload === "week") {
+                    state.data.urgencyLabel = "Standard";
+                    state.stack.push("services");
+                }
+                else if (payload === "quote") {
+                    state.data.urgencyLabel = "Quote";
+                    state.stack.push("request");
+                }
+                render();
             }
-            render();
-        }
-        else if (action === "manual-request") {
-            state.data.service = null;
-            state.data.serviceLabel = "General Request";
+            else if (action === "select-service") {
+                // LOOKUP VIA MAP (Fast & Reliable)
+                const svc = serviceMap[payload];
+                console.log("[MCM SBA] Service Found:", svc);
+
+                state.data.service = svc || null;
+                state.data.serviceLabel = svc ? svc.label : "General";
+                postEvent_("service_selected", { service_id: svc ? svc.id : "" });
+
+                // Logic: Has Calendar -> Booking. No Calendar -> Request.
+                if (svc && svc.booking_url) {
+                    console.log("[MCM SBA] Going to Booking URL:", svc.booking_url);
+                    state.stack.push("booking");
+                } else {
+                    console.log("[MCM SBA] No URL, going to Request Form");
+                    state.stack.push("request");
+                }
+                render();
+            }
+            else if (action === "manual-request") {
+                state.data.service = null;
+                state.data.serviceLabel = "General Request";
+                state.stack.push("request");
+                render();
+            }
+            else if (action === "fallback") {
+                state.stack.push("request");
+                render();
+            }
+            else if (action === "submit") {
+                handleSubmit_(btn, theme, state, render);
+            }
+            else if (action === "close-overlay") {
+                 document.querySelector("#mcm-sba-overlay").click();
+            }
+        } catch (err) {
+            console.error("[MCM SBA Error]", err);
+            // Emergency fallback
             state.stack.push("request");
             render();
-        }
-        else if (action === "fallback") {
-            state.stack.push("request");
-            render();
-        }
-        else if (action === "submit") {
-            handleSubmit_(btn, theme, state, render);
-        }
-        else if (action === "close-overlay") {
-             document.querySelector("#mcm-sba-overlay").click();
         }
     });
 
@@ -226,7 +243,7 @@
       els.body.innerHTML = `
         <div class="mcm-sba-muted" style="margin-bottom:10px;">Choose what you need help with:</div>
         <div class="mcm-sba-list">
-            ${services.map(s => renderRowItem_("select-service", s._idx, null, s.label, s.description)).join("")}
+            ${services.map(s => renderRowItem_("select-service", s._safeId, null, s.label, s.description)).join("")}
             <button class="mcm-sba-rowitem" data-action="manual-request">
                 <div>Something else?</div><span>›</span>
             </button>

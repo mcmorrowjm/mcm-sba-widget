@@ -22,17 +22,10 @@
     const config = await getConfig_(clientId);
     if (!config || !config.ok) { return; }
 
-    let defaultUrl = (config.booking_url || config.calendar_url || "").trim();
-    // Fallback: first service with any recognizable booking URL
+    let defaultUrl = config.booking_url || config.calendar_url || "";
     if (!defaultUrl && Array.isArray(config.services)) {
-        const firstWithUrl = config.services.find(s => {
-          const u = (s && (s.booking_url || s.bookingUrl || s.calendar_url || s.url || s.link)) || "";
-          return String(u).trim().startsWith("http");
-        });
-        if (firstWithUrl) {
-          const u = (firstWithUrl.booking_url || firstWithUrl.bookingUrl || firstWithUrl.calendar_url || firstWithUrl.url || firstWithUrl.link || "");
-          defaultUrl = String(u).trim();
-        }
+        const firstWithUrl = config.services.find(s => s.booking_url);
+        if (firstWithUrl) defaultUrl = firstWithUrl.booking_url;
     }
 
     const theme = {
@@ -41,7 +34,14 @@
       primaryCta: (config.primary_cta_label || "Get Scheduled"),
       business: config.business_name || "Appointments",
       bookingMode: config.booking_mode || "both",
-      services: Array.isArray(config.services) ? config.services : [],
+      // Normalize booking URL keys across templates (booking_url / bookingUrl / calendar_url / url)
+      // This preserves existing UI/UX while ensuring Calendly opens when a service has a link.
+      services: (Array.isArray(config.services) ? config.services : []).map((s) => {
+        const obj = (s && typeof s === "object") ? { ...s } : {};
+        const rawUrl = (obj.booking_url || obj.bookingUrl || obj.calendar_url || obj.url || obj.link || "");
+        obj.booking_url = String(rawUrl || "").trim();
+        return obj;
+      }),
       phone: String(config.business_phone || config.phone_number || config.phone || "").trim(),
       defaultUrl: defaultUrl,
       showUrgentMenu: config.show_urgent_menu === true,
@@ -50,24 +50,10 @@
 
     const serviceMap = {};
     theme.services.forEach((s, i) => {
-        if (!s || typeof s !== "object") return;
-
-        // Stable IDs
-        const id = (s.id !== undefined && s.id !== null) ? String(s.id) : ("svc_" + i);
-        const idxId = "svc_" + i;
-        s.id = id;
-        s._safeId = id;
+        const safeId = (s.id !== undefined && s.id !== null) ? String(s.id) : ("svc_" + i);
+        s._safeId = safeId; 
         s._idx = i;
-        s._idxId = idxId;
-
-        // Robust booking URL normalization
-        const rawUrl = (s.booking_url || s.bookingUrl || s.calendar_url || s.url || s.link || "");
-        s.booking_url = String(rawUrl || "").trim();
-
-        // Map by multiple keys so lookups never fail
-        serviceMap[id] = s;
-        serviceMap[s._safeId] = s;
-        serviceMap[idxId] = s;
+        serviceMap[safeId] = s;
     });
 
     const state = { 
@@ -197,13 +183,11 @@
                 render();
             }
             else if (action === "select-service") {
-                const key = String(payload || "");
-                const svc = serviceMap[key] || null;
-                state.data.service = svc;
+                const svc = serviceMap[payload];
+                state.data.service = svc || null;
                 state.data.serviceLabel = svc ? svc.label : "General";
                 postEvent_("service_selected", { service_id: svc ? svc.id : "" });
-
-                let targetUrl = (svc && svc.booking_url ? String(svc.booking_url).trim() : "") || String(theme.defaultUrl || "").trim();
+                let targetUrl = (svc ? svc.booking_url : "") || theme.defaultUrl;
                 if (targetUrl) {
                     if (state.data.service) state.data.service.booking_url = targetUrl;
                     else state.data.service = { label: "Booking", booking_url: targetUrl };
@@ -281,16 +265,11 @@
   }
 
   function viewBooking_(els, theme, svc) {
-      const url = svc ? String(svc.booking_url || "").trim() : "";
+      const url = svc ? svc.booking_url : "";
       els.title.textContent = "Select Time";
       els.step.textContent = svc ? svc.label : "Booking";
-      els.body.classList.add("mcm-sba-no-pad");
-      els.body.innerHTML = `<iframe id="mcm-sba-cal" class="mcm-sba-iframe" src="${escapeAttr_(url)}" loading="lazy"></iframe>`;
-
-      // Ensure Calendly has enough vertical space to render full UI (buttons instead of dropdown)
-      requestAnimationFrame(() => adjustBookingIframe_(els));
-      bindBookingResizeOnce_();
-
+      els.body.classList.add("mcm-sba-no-pad"); 
+      els.body.innerHTML = `<iframe class="mcm-sba-iframe" src="${escapeAttr_(url)}" loading="lazy"></iframe>`;
       els.footer.style.display = "block";
       els.footer.innerHTML = `
          <div class="mcm-sba-actions" style="margin-top:0;">
@@ -385,43 +364,7 @@
       }
   }
 
-  
-  // Booking iframe sizing helper (keeps Calendly in full layout inside the sheet)
-  let __bookingResizeBound = false;
-  function bindBookingResizeOnce_() {
-    if (__bookingResizeBound) return;
-    __bookingResizeBound = true;
-    window.addEventListener("resize", () => {
-      const iframe = document.getElementById("mcm-sba-cal");
-      if (!iframe) return;
-      const panel = iframe.closest("#mcm-sba-panel");
-      if (!panel) return;
-      const header = panel.querySelector('.mcm-sba-header');
-      const footer = panel.querySelector('.mcm-sba-footer');
-      const body = panel.querySelector('.mcm-sba-body');
-      if (!body) return;
-      const h = (panel.clientHeight || 0) - (header ? header.offsetHeight : 0) - (footer ? footer.offsetHeight : 0);
-      if (h > 200) body.style.height = h + 'px';
-    }, { passive: true });
-  }
-
-  function adjustBookingIframe_(els) {
-    try {
-      const panel = els && els.body ? els.body.closest('#mcm-sba-panel') : null;
-      const iframe = document.getElementById('mcm-sba-cal');
-      if (!panel || !iframe) return;
-      const headerEl = panel.querySelector('.mcm-sba-header');
-      const footerEl = panel.querySelector('.mcm-sba-footer');
-      const headerH = headerEl ? headerEl.offsetHeight : 0;
-      const footerH = footerEl ? footerEl.offsetHeight : 0;
-      const available = (panel.clientHeight || 0) - headerH - footerH;
-      if (available > 200) {
-        els.body.style.height = available + 'px';
-      }
-    } catch (_) {}
-  }
-
-async function getConfig_(client) {
+  async function getConfig_(client) {
     const api = apiBase.replace(/\/$/, "");
     try { return await (await fetch(`${api}?action=config&client=${client}`)).json(); } catch(e){ return {ok:false}; }
   }

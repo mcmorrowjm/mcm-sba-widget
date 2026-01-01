@@ -11,7 +11,7 @@
     return;
   }
 
-  const VERSION = "1.7.0"; // Final Polish: Dynamic Labels + Smart Routing
+  const VERSION = "1.7.1"; // Fixes: ID Type Mismatch & Urgent Failover
   const sessionId = getOrCreateSessionId_();
 
   injectCss_();
@@ -30,6 +30,12 @@
       services: Array.isArray(config.services) ? config.services : [],
       phone: String(config.business_phone || config.phone_number || config.phone || "").trim(),
     };
+
+    // Ensure services have string IDs to prevent mismatch errors
+    theme.services.forEach((s, i) => {
+        if (!s.id) s.id = "svc_" + i;
+        else s.id = String(s.id); // Force string
+    });
 
     // Global State
     const state = { 
@@ -138,70 +144,84 @@
         const action = btn.dataset.action;
         const payload = btn.dataset.payload;
 
-        if (action === "back") {
-            if (state.stack.length > 1) state.stack.pop();
-            render();
-        } 
-        else if (action === "urgency") {
-            state.data.urgency = payload; 
-            
-            if (payload === "today") {
-                state.data.urgencyLabel = "Urgent";
-                state.data.filterMode = "emergency"; 
-
-                // Smart Routing: Check for existing 'Emergency' calendar
-                const emergService = theme.services.find(s => /emergency|urgent/i.test(s.label || ""));
+        try {
+            if (action === "back") {
+                if (state.stack.length > 1) state.stack.pop();
+                render();
+            } 
+            else if (action === "urgency") {
+                state.data.urgency = payload; 
                 
-                if (emergService && emergService.booking_url) {
-                    state.data.service = emergService;
-                    state.data.serviceLabel = emergService.label;
-                    postEvent_("service_selected", { service_id: emergService.id });
-                    state.stack.push("booking");
-                } else {
-                    state.stack.push("hot"); // Fallback to Hot Interstitial
-                }
-            }
-            else if (payload === "week") {
-                state.data.urgencyLabel = "Standard";
-                state.data.filterMode = "standard"; 
-                state.stack.push("services");
-            }
-            else if (payload === "quote") {
-                state.data.urgencyLabel = "Quote";
-                state.stack.push("request");
-            }
-            render();
-        }
-        else if (action === "continue-hot") {
-            state.data.filterMode = "emergency"; // Keep emergency mode
-            state.stack.push("services");
-            render();
-        }
-        else if (action === "select-service") {
-            const svc = theme.services.find(s => s.id === payload);
-            state.data.service = svc || null;
-            state.data.serviceLabel = svc ? svc.label : "General";
-            postEvent_("service_selected", { service_id: payload });
+                if (payload === "today") {
+                    state.data.urgencyLabel = "Urgent";
+                    state.data.filterMode = "emergency"; 
 
-            if (svc && svc.booking_url) state.stack.push("booking");
-            else state.stack.push("request");
-            render();
-        }
-        else if (action === "manual-request") {
-            state.data.service = null;
-            state.data.serviceLabel = "General Request";
-            state.stack.push("request");
-            render();
-        }
-        else if (action === "fallback") {
-            state.stack.push("request");
-            render();
-        }
-        else if (action === "submit") {
-            handleSubmit_(btn, theme, state, render);
-        }
-        else if (action === "close-overlay") {
-             document.querySelector("#mcm-sba-overlay").click();
+                    // SMART ROUTING with Fail-Safe
+                    // Find any service with 'emergency' or 'urgent' in label
+                    const emergService = theme.services.find(s => /emergency|urgent/i.test(s.label || ""));
+                    
+                    // Only go to calendar if service found AND has URL
+                    if (emergService && emergService.booking_url) {
+                        state.data.service = emergService;
+                        state.data.serviceLabel = emergService.label;
+                        postEvent_("service_selected", { service_id: emergService.id });
+                        state.stack.push("booking");
+                    } else {
+                        // Fallback to "Call Now" if no calendar found
+                        state.stack.push("hot");
+                    }
+                }
+                else if (payload === "week") {
+                    state.data.urgencyLabel = "Standard";
+                    state.data.filterMode = "standard"; 
+                    state.stack.push("services");
+                }
+                else if (payload === "quote") {
+                    state.data.urgencyLabel = "Quote";
+                    state.stack.push("request");
+                }
+                render();
+            }
+            else if (action === "continue-hot") {
+                state.data.filterMode = "emergency"; 
+                state.stack.push("services");
+                render();
+            }
+            else if (action === "select-service") {
+                // FIXED: Use Loose Equality (==) for ID match
+                const svc = theme.services.find(s => s.id == payload);
+                
+                state.data.service = svc || null;
+                state.data.serviceLabel = svc ? svc.label : "General";
+                postEvent_("service_selected", { service_id: payload });
+
+                if (svc && svc.booking_url) state.stack.push("booking");
+                else state.stack.push("request");
+                render();
+            }
+            else if (action === "manual-request") {
+                state.data.service = null;
+                state.data.serviceLabel = "General Request";
+                state.stack.push("request");
+                render();
+            }
+            else if (action === "fallback") {
+                state.stack.push("request");
+                render();
+            }
+            else if (action === "submit") {
+                handleSubmit_(btn, theme, state, render);
+            }
+            else if (action === "close-overlay") {
+                 document.querySelector("#mcm-sba-overlay").click();
+            }
+        } catch (err) {
+            console.error("MCM SBA Error:", err);
+            // Emergency fallback if anything crashes
+            if (action === "urgency" && payload === "today") {
+                state.stack.push("hot");
+                render();
+            }
         }
     });
 
@@ -244,7 +264,6 @@
       
       let services = theme.services;
       if (filterMode === "standard") {
-          // Hide Emergency items for standard flow
           services = services.filter(s => !/emergency|urgent/i.test(s.label));
       }
 
@@ -259,10 +278,14 @@
   }
 
   function viewBooking_(els, theme, svc) {
+      // Safety check in case svc is missing
+      const label = svc ? svc.label : "Booking";
+      const url = svc ? svc.booking_url : "";
+
       els.title.textContent = "Select Time";
-      els.step.textContent = svc.label;
+      els.step.textContent = label;
       els.body.classList.add("mcm-sba-no-pad"); 
-      els.body.innerHTML = `<iframe class="mcm-sba-iframe" src="${escapeAttr_(svc.booking_url)}" loading="lazy"></iframe>`;
+      els.body.innerHTML = `<iframe class="mcm-sba-iframe" src="${escapeAttr_(url)}" loading="lazy"></iframe>`;
       
       els.footer.style.display = "block";
       els.footer.innerHTML = `
@@ -276,7 +299,6 @@
       els.step.textContent = "Contact Info";
       const isHot = data.urgency === "today";
       
-      // DYNAMIC LABEL LOGIC
       const detailsLabel = isHot ? "Critical Issue Details" : "Details";
       const detailsPlace = isHot ? "Please describe the critical issue..." : "How can we help?";
 

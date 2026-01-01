@@ -11,7 +11,7 @@
     return;
   }
 
-  const VERSION = "1.5.0"; // Event Delegation (Indestructible Navigation)
+  const VERSION = "1.7.0"; // Final Polish: Dynamic Labels + Smart Routing
   const sessionId = getOrCreateSessionId_();
 
   injectCss_();
@@ -33,8 +33,8 @@
 
     // Global State
     const state = { 
-      stack: ["urgency"], // Start at urgency view
-      data: { urgency: "", urgencyLabel: "", service: null }
+      stack: ["urgency"], 
+      data: { urgency: "", urgencyLabel: "", service: null, filterMode: "" }
     };
 
     if (inlineSelector) {
@@ -50,7 +50,6 @@
   }
 
   function renderFloating_(theme, state) {
-    // 1. Launcher Button
     const launcher = document.createElement("div");
     launcher.id = "mcm-sba-launcher";
     const iconSvg = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>`;
@@ -61,20 +60,16 @@
       </button>`;
     document.body.appendChild(launcher);
 
-    // 2. Overlay
     const overlay = document.createElement("div");
     overlay.id = "mcm-sba-overlay";
     document.body.appendChild(overlay);
 
-    // 3. Panel
     const panel = document.createElement("div");
     panel.id = "mcm-sba-panel";
     document.body.appendChild(panel);
 
-    // 4. Mount Logic (The Master Controller)
     const ui = bindPanelLogic_(panel, theme, state);
 
-    // 5. Open/Close Triggers
     const toggle = (isOpen) => {
         const method = isOpen ? "add" : "remove";
         overlay.classList[method]("open");
@@ -86,7 +81,6 @@
     overlay.onclick = () => toggle(false);
     ui.closeBtn.onclick = () => toggle(false);
     
-    // Initial Render
     ui.render();
   }
 
@@ -99,9 +93,7 @@
     ui.render();
   }
 
-  // --- THE MASTER CONTROLLER (Event Delegation) ---
   function bindPanelLogic_(panel, theme, state) {
-    // Skeleton
     panel.innerHTML = `
       <div class="mcm-sba-header">
         <button class="mcm-sba-back" style="display:none;">‹</button>
@@ -124,46 +116,64 @@
         footer: panel.querySelector(".mcm-sba-footer")
     };
 
-    // --- RENDERER ---
     const render = () => {
         const currentView = state.stack[state.stack.length - 1];
         
-        // Reset Layout
         els.body.classList.remove("mcm-sba-no-pad"); 
         els.footer.style.display = "none";
         els.back.style.display = state.stack.length > 1 ? "inline-flex" : "none";
 
-        // Route to View
         if (currentView === "urgency") viewUrgency_(els, theme);
         else if (currentView === "hot") viewHot_(els, theme);
-        else if (currentView === "services") viewServices_(els, theme);
+        else if (currentView === "services") viewServices_(els, theme, state.data.filterMode);
         else if (currentView === "booking") viewBooking_(els, theme, state.data.service);
         else if (currentView === "request") viewRequest_(els, theme, state.data);
         else if (currentView === "success") viewSuccess_(els, theme);
     };
 
-    // --- GLOBAL CLICK LISTENER (The Fix) ---
     panel.addEventListener("click", (e) => {
-        const btn = e.target.closest("[data-action]"); // Find closest button with action
-        if (!btn) return; // Clicked whitespace? Ignore.
+        const btn = e.target.closest("[data-action]");
+        if (!btn) return;
 
         const action = btn.dataset.action;
-        const payload = btn.dataset.payload; // Optional ID/Data
+        const payload = btn.dataset.payload;
 
         if (action === "back") {
             if (state.stack.length > 1) state.stack.pop();
             render();
         } 
         else if (action === "urgency") {
-            state.data.urgency = payload; // 'today', 'week', 'quote'
-            state.data.urgencyLabel = (payload === "today") ? "Urgent" : (payload === "quote" ? "Quote" : "Standard");
+            state.data.urgency = payload; 
             
-            if (payload === "today" && theme.phone) state.stack.push("hot");
-            else if (payload === "quote") state.stack.push("request"); // BYPASS CALENDAR
-            else state.stack.push("services");
+            if (payload === "today") {
+                state.data.urgencyLabel = "Urgent";
+                state.data.filterMode = "emergency"; 
+
+                // Smart Routing: Check for existing 'Emergency' calendar
+                const emergService = theme.services.find(s => /emergency|urgent/i.test(s.label || ""));
+                
+                if (emergService && emergService.booking_url) {
+                    state.data.service = emergService;
+                    state.data.serviceLabel = emergService.label;
+                    postEvent_("service_selected", { service_id: emergService.id });
+                    state.stack.push("booking");
+                } else {
+                    state.stack.push("hot"); // Fallback to Hot Interstitial
+                }
+            }
+            else if (payload === "week") {
+                state.data.urgencyLabel = "Standard";
+                state.data.filterMode = "standard"; 
+                state.stack.push("services");
+            }
+            else if (payload === "quote") {
+                state.data.urgencyLabel = "Quote";
+                state.stack.push("request");
+            }
             render();
         }
         else if (action === "continue-hot") {
+            state.data.filterMode = "emergency"; // Keep emergency mode
             state.stack.push("services");
             render();
         }
@@ -195,12 +205,11 @@
         }
     });
 
-    els.back.setAttribute("data-action", "back"); // Make back button work via delegation too
-
+    els.back.setAttribute("data-action", "back");
     return { render, closeBtn: els.close };
   }
 
-  // --- VIEWS (HTML Generators Only) ---
+  // --- VIEWS ---
   
   function viewUrgency_(els, theme) {
       els.title.textContent = theme.business;
@@ -229,13 +238,20 @@
         </div>`;
   }
 
-  function viewServices_(els, theme) {
+  function viewServices_(els, theme, filterMode) {
       els.title.textContent = theme.business;
       els.step.textContent = "Step 2 of 3";
+      
+      let services = theme.services;
+      if (filterMode === "standard") {
+          // Hide Emergency items for standard flow
+          services = services.filter(s => !/emergency|urgent/i.test(s.label));
+      }
+
       els.body.innerHTML = `
         <div class="mcm-sba-muted" style="margin-bottom:10px;">Choose what you need help with:</div>
         <div class="mcm-sba-list">
-            ${theme.services.map(s => renderRowItem_("select-service", s.id, null, s.label, s.description)).join("")}
+            ${services.map(s => renderRowItem_("select-service", s.id, null, s.label, s.description)).join("")}
             <button class="mcm-sba-rowitem" data-action="manual-request">
                 <div>Something else?</div><span>›</span>
             </button>
@@ -245,7 +261,7 @@
   function viewBooking_(els, theme, svc) {
       els.title.textContent = "Select Time";
       els.step.textContent = svc.label;
-      els.body.classList.add("mcm-sba-no-pad"); // Full bleed
+      els.body.classList.add("mcm-sba-no-pad"); 
       els.body.innerHTML = `<iframe class="mcm-sba-iframe" src="${escapeAttr_(svc.booking_url)}" loading="lazy"></iframe>`;
       
       els.footer.style.display = "block";
@@ -260,6 +276,10 @@
       els.step.textContent = "Contact Info";
       const isHot = data.urgency === "today";
       
+      // DYNAMIC LABEL LOGIC
+      const detailsLabel = isHot ? "Critical Issue Details" : "Details";
+      const detailsPlace = isHot ? "Please describe the critical issue..." : "How can we help?";
+
       els.body.innerHTML = `
           <div class="mcm-sba-muted" style="margin-bottom:10px;">
             <b>${escapeHtml_(theme.primaryCta)}</b> — we’ll contact you ASAP.
@@ -271,8 +291,8 @@
             <div><div class="mcm-sba-label">Email</div><input class="mcm-sba-input" id="mcm-email" placeholder="you@email.com" /></div>
             <div><div class="mcm-sba-label">Phone</div><input class="mcm-sba-input" id="mcm-phone" placeholder="(555) 123-4567" /></div>
           </div>
-          <div class="mcm-sba-label">Details</div>
-          <textarea class="mcm-sba-input" id="mcm-msg" rows="3" placeholder="How can we help?"></textarea>
+          <div class="mcm-sba-label">${detailsLabel}</div>
+          <textarea class="mcm-sba-input" id="mcm-msg" rows="3" placeholder="${detailsPlace}"></textarea>
           <input id="mcm-hp" style="position:absolute; opacity:0; pointer-events:none; width:1px;" tabindex="-1" />
       `;
 
@@ -296,7 +316,6 @@
         </div>`;
       els.footer.style.display = "block";
       els.footer.innerHTML = `<button class="mcm-sba-secondary" data-action="close-overlay">Close</button>`;
-      // Force hide back button on success
       els.back.style.display = "none";
   }
 
@@ -314,7 +333,6 @@
   async function handleSubmit_(btn, theme, state, renderFn) {
       btn.textContent = "Sending...";
       btn.disabled = true;
-
       const val = (id) => (document.querySelector(id)||{}).value||"";
       
       const payload = {
@@ -335,13 +353,10 @@
           const api = document.currentScript.getAttribute("data-api").replace(/\/$/, "");
           const res = await fetch(`${api}?action=lead`, {method:"POST", body:JSON.stringify(payload)});
           const json = await res.json();
-          
           if (json.ok) {
-              state.stack = ["success"]; // Clear history
+              state.stack = ["success"];
               renderFn();
-          } else {
-              throw new Error("API Error");
-          }
+          } else { throw new Error("API Error"); }
       } catch (e) {
           btn.textContent = "Try Again";
           btn.disabled = false;
@@ -355,7 +370,9 @@
     try { return await (await fetch(`${api}?action=config&client=${client}`)).json(); } catch(e){ return {ok:false}; }
   }
   function postEvent_(name, meta) {
-      // simplified for brevity
+      const api = document.currentScript.getAttribute("data-api").replace(/\/$/, "");
+      const clientId = document.currentScript.getAttribute("data-client");
+      fetch(`${api}?action=event`, {method:"POST", body:JSON.stringify({client_id:clientId, session_id:sessionId, event_name:name, meta})}).catch(()=>{});
   }
   function injectCss_() {
     const s = document.currentScript;

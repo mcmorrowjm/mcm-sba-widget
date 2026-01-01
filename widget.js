@@ -330,7 +330,7 @@
       btn.disabled = true;
       const val = (id) => (document.querySelector(id)||{}).value||"";
       const payload = {
-        client_id: document.currentScript.getAttribute("data-client"),
+        client_id: clientId,
         session_id: getOrCreateSessionId_(),
         intent: state.data.urgency === "today" ? "urgent" : "request",
         service_id: state.data.service ? state.data.service.id : "",
@@ -343,7 +343,7 @@
         source_url: location.href
       };
       try {
-          const api = document.currentScript.getAttribute("data-api").replace(/\/$/, "");
+          const api = apiBase.replace(/\/$/, "");
           const res = await fetch(`${api}?action=lead`, {method:"POST", body:JSON.stringify(payload)});
           const json = await res.json();
           if (json.ok) {
@@ -358,12 +358,12 @@
   }
 
   async function getConfig_(client) {
-    const api = document.currentScript.getAttribute("data-api").replace(/\/$/, "");
+    const api = apiBase.replace(/\/$/, "");
     try { return await (await fetch(`${api}?action=config&client=${client}`)).json(); } catch(e){ return {ok:false}; }
   }
   function postEvent_(name, meta) {
-      const api = document.currentScript.getAttribute("data-api").replace(/\/$/, "");
-      const clientId = document.currentScript.getAttribute("data-client");
+      const api = apiBase.replace(/\/$/, "");
+      const clientId = clientId;
       fetch(`${api}?action=event`, {method:"POST", body:JSON.stringify({client_id:clientId, session_id:sessionId, event_name:name, meta})}).catch(()=>{});
   }
   function injectCss_() {

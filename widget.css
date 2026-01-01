@@ -1,181 +1,296 @@
+/**
+ * widget.css — iOS / Apple Theme (Final with Calendar Fix)
+ */
+
+/* --- Font Reset --- */
+.mcm-sba-reset, #mcm-sba-launcher, #mcm-sba-panel {
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* --- Launcher Button --- */
 #mcm-sba-launcher {
   position: fixed;
-  right: 18px;
-  bottom: 18px;
+  right: 20px;
+  bottom: 20px;
   z-index: 2147483000;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 .mcm-sba-btn {
   border: 0;
-  border-radius: 999px;
-  padding: 12px 16px;
-  font-weight: 700;
+  border-radius: 999px; /* Pill shape */
+  padding: 14px 22px;
+  font-weight: 600;
+  font-size: 15px;
   cursor: pointer;
-  box-shadow: 0 10px 25px rgba(0,0,0,.18);
+  /* iOS-style drop shadow */
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.04);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
+.mcm-sba-btn:hover {
+  transform: scale(1.02);
+  box-shadow: 0 12px 32px rgba(0,0,0,0.16), 0 4px 12px rgba(0,0,0,0.08);
+}
+
+.mcm-sba-btn:active {
+  transform: scale(0.96);
+}
+
+/* --- Overlay (Backdrop) --- */
 #mcm-sba-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,.35);
+  background: rgba(0,0,0,0.2);
+  backdrop-filter: blur(4px);
   z-index: 2147483001;
   display: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+#mcm-sba-overlay.open {
+  display: block;
+  opacity: 1;
 }
 
+/* --- Main Panel --- */
 #mcm-sba-panel {
   position: fixed;
-  right: 0;
-  top: 0;
-  height: 100vh;
-  width: min(420px, 100vw);
-  background: #fff;
+  bottom: 20px;
+  right: 20px;
+  width: 380px;
+  max-width: calc(100vw - 40px);
+  max-height: calc(100vh - 40px);
   z-index: 2147483002;
-  transform: translateX(110%);
-  transition: transform .22s ease;
-  border-left: 1px solid rgba(0,0,0,.08);
-  box-shadow: -18px 0 40px rgba(0,0,0,.18);
+  
+  /* Glassmorphism */
+  background: rgba(255, 255, 255, 0.92); /* Slightly more opaque for readability */
+  backdrop-filter: blur(25px) saturate(180%);
+  -webkit-backdrop-filter: blur(25px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 20px 50px rgba(0,0,0,0.15), 0 4px 12px rgba(0,0,0,0.05);
+  
+  border-radius: 24px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+  
+  /* Animation State: Hidden */
+  opacity: 0;
+  transform: translateY(20px) scale(0.95);
+  pointer-events: none;
+  transition: opacity 0.3s ease, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-#mcm-sba-panel.open { transform: translateX(0%); }
+/* Animation State: Open */
+#mcm-sba-panel.open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
 
+/* --- Inline Mode Override --- */
+.mcm-sba-inline-panel {
+  position: relative !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 100% !important;
+  box-shadow: none !important;
+  transform: none !important;
+  opacity: 1 !important;
+  background: #fff !important;
+  border: 1px solid rgba(0,0,0,0.08);
+}
+
+/* --- Header --- */
 .mcm-sba-header {
-  padding: 14px 14px 10px 14px;
-  border-bottom: 1px solid rgba(0,0,0,.08);
+  padding: 18px 24px;
   display: flex;
-  align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  align-items: flex-start;
+  background: rgba(255,255,255,0.5);
+  border-bottom: 1px solid rgba(0,0,0,0.06);
 }
 
-.mcm-sba-title { font-size: 14px; font-weight: 800; margin: 0; }
-.mcm-sba-sub { font-size: 12px; opacity: .75; margin: 2px 0 0 0; }
+.mcm-sba-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #000;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.mcm-sba-step {
+  font-size: 13px;
+  color: rgba(0,0,0,0.55);
+  margin: 2px 0 0 0;
+  line-height: 1.3;
+}
 
 .mcm-sba-close {
-  margin-left: auto;
+  background: rgba(0,0,0,0.06);
   border: 0;
-  background: transparent;
-  font-size: 22px;
-  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: rgba(0,0,0,0.5);
+  font-size: 20px;
   line-height: 1;
-  padding: 6px 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+.mcm-sba-close:hover { background: rgba(0,0,0,0.12); color: #000; }
+
+.mcm-sba-back {
+  background: transparent;
+  border: 0;
+  font-size: 24px;
+  color: #007AFF;
+  cursor: pointer;
+  margin-right: 8px;
+  line-height: 1;
+  padding: 0;
+  font-weight: 300;
 }
 
+/* --- Body --- */
 .mcm-sba-body {
-  padding: 12px 14px 14px 14px;
-  overflow: auto;
+  padding: 24px; /* Standard Apple Padding */
+  overflow-y: auto;
+  overflow-x: hidden;
   flex: 1;
 }
 
-.mcm-sba-card {
-  border: 1px solid rgba(0,0,0,.10);
-  border-radius: 14px;
-  padding: 12px;
-  margin-bottom: 10px;
+/* --- THE FIX: No Padding Mode for Calendly --- */
+.mcm-sba-body.mcm-sba-no-pad {
+  padding: 0 !important; /* Forces iframe to edges */
 }
 
-.mcm-sba-service {
-  border: 1px solid rgba(0,0,0,.10);
-  border-radius: 14px;
-  padding: 10px 12px;
-  width: 100%;
-  text-align: left;
-  background: #fff;
-  cursor: pointer;
-}
-
-.mcm-sba-service + .mcm-sba-service { margin-top: 8px; }
-
-.mcm-sba-muted { font-size: 12px; opacity: .75; }
-.mcm-sba-label { font-size: 12px; font-weight: 700; margin: 10px 0 6px; }
-
-.mcm-sba-input {
-  width: 100%;
-  box-sizing: border-box;
-  border: 1px solid rgba(0,0,0,.18);
-  border-radius: 10px;
-  padding: 10px 10px;
-  font-size: 14px;
-}
-
-.mcm-sba-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.mcm-sba-actions { display: flex; gap: 8px; margin-top: 10px; }
-
-.mcm-sba-primary {
-  border: 0;
-  border-radius: 10px;
-  padding: 10px 12px;
-  font-weight: 800;
-  cursor: pointer;
-  width: 100%;
-}
-
-.mcm-sba-secondary {
-  border: 1px solid rgba(0,0,0,.18);
-  border-radius: 10px;
-  padding: 10px 12px;
-  font-weight: 700;
-  cursor: pointer;
-  width: 100%;
-  background: #fff;
-}
-
-.mcm-sba-iframe {
-  width: 100%;
-  height: 520px;
-  border: 0;
-  border-radius: 14px;
-  background: #f7f7f7;
-}
-
-@media (max-width: 520px) {
-  #mcm-sba-panel {
-    width: 100vw;
-    height: 70vh;
-    top: auto;
-    bottom: 0;
-    border-left: none;
-    border-top: 1px solid rgba(0,0,0,.08);
-    border-radius: 18px 18px 0 0;
-  }
-  .mcm-sba-row { grid-template-columns: 1fr; }
-}
-
-
-/* --- BOOKING MODE: make Calendly full-bleed and tall --- */
-.mcm-sba-body.mcm-sba-booking{
-  padding: 0;
+/* --- List Items / Cards --- */
+.mcm-sba-list {
+  display: flex;
+  flex-direction: column;
+  background: rgba(255,255,255,0.5);
+  border-radius: 12px;
   overflow: hidden;
 }
 
-.mcm-sba-booking-wrap{
-  height: 100%;
+.mcm-sba-rowitem {
   display: flex;
-  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(0,0,0,0.08);
+  padding: 16px;
+  text-align: left;
+  cursor: pointer;
+  font-size: 16px;
+  color: #000;
+  transition: background 0.2s;
+}
+.mcm-sba-rowitem:last-child { border-bottom: 0; }
+.mcm-sba-rowitem:hover { background: rgba(255,255,255,0.8); }
+
+.mcm-sba-card {
+  background: rgba(255,255,255,0.6);
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid rgba(0,0,0,0.05);
+  margin-bottom: 12px;
 }
 
-.mcm-sba-iframe-wrap{
-  flex: 1;
-  min-height: 520px;
-  background: #f9f9f9;
+/* --- Typography Helpers --- */
+.mcm-sba-muted { font-size: 14px; color: rgba(0,0,0,0.55); }
+.mcm-sba-label { font-size: 12px; text-transform: uppercase; font-weight: 600; color: rgba(0,0,0,0.45); margin: 16px 0 6px 4px; }
+
+/* --- Inputs --- */
+.mcm-sba-input {
+  width: 100%;
+  background: rgba(118, 118, 128, 0.12);
+  border: 0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 16px; 
+  color: #000;
+  font-family: inherit;
+  margin-bottom: 8px;
+}
+.mcm-sba-input:focus { outline: none; background: #fff; box-shadow: 0 0 0 2px rgba(0,122,255,0.3); }
+textarea.mcm-sba-input { resize: vertical; min-height: 80px; }
+
+.mcm-sba-row { display: flex; gap: 10px; }
+.mcm-sba-row > * { flex: 1; }
+
+/* --- Footer --- */
+.mcm-sba-footer {
+  padding: 16px 24px;
+  background: rgba(255,255,255,0.5);
+  border-top: 1px solid rgba(0,0,0,0.06);
 }
 
-.mcm-sba-body.mcm-sba-booking .mcm-sba-iframe{
-  width: 100% !important;
-  height: 100% !important;
-  margin: 0 !important;
+.mcm-sba-actions { display: flex; flex-direction: column; gap: 10px; }
+
+.mcm-sba-primary {
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  padding: 14px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.mcm-sba-secondary {
+  background: transparent;
+  color: #007AFF;
+  border: 0;
+  padding: 10px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  width: 100%;
+}
+.mcm-sba-secondary:hover { text-decoration: underline; }
+
+.mcm-sba-pill {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+/* --- Iframe --- */
+.mcm-sba-iframe {
+  width: 100%;
+  height: 600px;
   border: 0;
   display: block;
   background: #f9f9f9;
-  border-radius: 0;
 }
 
-.mcm-sba-booking-actions{
-  padding: 14px 18px;
-  display: flex;
-  justify-content: center;
-  gap: 18px;
-  border-top: 1px solid rgba(0,0,0,0.06);
-  background: rgba(255,255,255,0.85);
+/* Mobile */
+@media (max-width: 480px) {
+  #mcm-sba-panel {
+    bottom: 0; right: 0; left: 0;
+    width: 100%; max-width: 100%; max-height: 85vh;
+    border-radius: 20px 20px 0 0;
+    border-bottom: 0;
+  }
 }

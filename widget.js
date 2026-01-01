@@ -11,7 +11,7 @@
     return;
   }
 
-  const VERSION = "1.8.0"; // The Simplifier: Direct Urgent Form + Fixed Week Click
+  const VERSION = "1.9.1"; // INDEX-BASED LOOKUP (Universal/Future-Proof)
   const sessionId = getOrCreateSessionId_();
 
   injectCss_();
@@ -31,12 +31,11 @@
       phone: String(config.business_phone || config.phone_number || config.phone || "").trim(),
     };
 
-    // 1. CRITICAL FIX: Force all Service IDs to be Strings for reliable clicking
+    // ASSIGN INDEXES: This makes the widget "Future Proof" for any client list
     theme.services.forEach((s, i) => {
-        s.id = String(s.id || "svc_" + i);
+        s._idx = i; // Save the position (0, 1, 2...)
     });
 
-    // Global State
     const state = { 
       stack: ["urgency"], 
       data: { urgency: "", urgencyLabel: "", service: null }
@@ -99,7 +98,6 @@
   }
 
   function bindPanelLogic_(panel, theme, state) {
-    // Basic Skeleton
     panel.innerHTML = `
       <div class="mcm-sba-header">
         <button class="mcm-sba-back" style="display:none;">‹</button>
@@ -125,7 +123,6 @@
     const render = () => {
         const currentView = state.stack[state.stack.length - 1];
         
-        // Reset Styles
         els.body.classList.remove("mcm-sba-no-pad"); 
         els.footer.style.display = "none";
         els.back.style.display = state.stack.length > 1 ? "inline-flex" : "none";
@@ -137,13 +134,13 @@
         else if (currentView === "success") viewSuccess_(els, theme);
     };
 
-    // --- THE ROUTER ---
+    // --- MAIN ROUTER ---
     panel.addEventListener("click", (e) => {
         const btn = e.target.closest("[data-action]");
         if (!btn) return;
 
         const action = btn.dataset.action;
-        const payload = btn.dataset.payload;
+        const payload = btn.dataset.payload; // This is a STRING
 
         if (action === "back") {
             if (state.stack.length > 1) state.stack.pop();
@@ -153,32 +150,34 @@
             state.data.urgency = payload; 
             
             if (payload === "today") {
-                // DIRECT PATH: Urgent -> Form
                 state.data.urgencyLabel = "Urgent";
-                state.stack.push("request"); 
+                state.stack.push("request"); // Direct to Form
             }
             else if (payload === "week") {
-                // NORMAL PATH: Week -> Services -> Calendar
                 state.data.urgencyLabel = "Standard";
                 state.stack.push("services");
             }
             else if (payload === "quote") {
-                // INFO PATH: Quote -> Form
                 state.data.urgencyLabel = "Quote";
                 state.stack.push("request");
             }
             render();
         }
         else if (action === "select-service") {
-            // Find service by String ID (Reliable)
-            const svc = theme.services.find(s => s.id === payload);
+            // ROBUST LOOKUP: Use Index Position
+            const idx = parseInt(payload, 10);
+            const svc = theme.services[idx];
             
             state.data.service = svc || null;
             state.data.serviceLabel = svc ? svc.label : "General";
-            postEvent_("service_selected", { service_id: payload });
+            postEvent_("service_selected", { service_id: svc ? svc.id : "" });
 
-            if (svc && svc.booking_url) state.stack.push("booking");
-            else state.stack.push("request");
+            // Logic: Has Calendar -> Booking. No Calendar -> Request.
+            if (svc && svc.booking_url) {
+                state.stack.push("booking");
+            } else {
+                state.stack.push("request");
+            }
             render();
         }
         else if (action === "manual-request") {
@@ -221,13 +220,13 @@
       els.title.textContent = theme.business;
       els.step.textContent = "Step 2 of 3";
       
-      // Filter out 'Emergency' labels for the standard weekly view
+      // Filter out 'Emergency' labels from the standard weekly list
       const services = theme.services.filter(s => !/emergency|urgent/i.test(s.label));
 
       els.body.innerHTML = `
         <div class="mcm-sba-muted" style="margin-bottom:10px;">Choose what you need help with:</div>
         <div class="mcm-sba-list">
-            ${services.map(s => renderRowItem_("select-service", s.id, null, s.label, s.description)).join("")}
+            ${services.map(s => renderRowItem_("select-service", s._idx, null, s.label, s.description)).join("")}
             <button class="mcm-sba-rowitem" data-action="manual-request">
                 <div>Something else?</div><span>›</span>
             </button>
@@ -239,8 +238,6 @@
       
       els.title.textContent = "Select Time";
       els.step.textContent = svc ? svc.label : "Booking";
-      
-      // Full Bleed for Calendar
       els.body.classList.add("mcm-sba-no-pad"); 
       els.body.innerHTML = `<iframe class="mcm-sba-iframe" src="${escapeAttr_(url)}" loading="lazy"></iframe>`;
       
@@ -257,7 +254,7 @@
       
       const isHot = data.urgency === "today";
       
-      // DYNAMIC LABELS
+      // Dynamic Labels
       const detailsLabel = isHot ? "Critical Issue Details" : "Details";
       const detailsPlace = isHot ? "Please describe the critical issue..." : "How can we help?";
 
@@ -300,11 +297,11 @@
       els.back.style.display = "none";
   }
 
-  // --- LOGIC HELPERS ---
+  // --- HELPERS ---
   function renderRowItem_(action, payload, color, title, sub) {
       const dot = color ? `<div style="background:${color}; width:12px; height:12px; border-radius:50%; margin-right:12px; flex-shrink:0;"></div>` : "";
       return `
-        <button class="mcm-sba-rowitem" data-action="${action}" data-payload="${payload}" style="display:flex; align-items:center;">
+        <button class="mcm-sba-rowitem" data-action="${action}" data-payload="${escapeAttr_(String(payload))}" style="display:flex; align-items:center;">
           ${dot}
           <div style="flex:1;">${escapeHtml_(title)} <span class="mcm-sba-muted" style="display:block; font-size:13px; margin-top:2px;">${escapeHtml_(sub||"")}</span></div>
           <span>›</span>

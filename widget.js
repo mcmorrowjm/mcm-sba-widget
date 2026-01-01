@@ -11,8 +11,8 @@
     return;
   }
 
-  // --- VERSION 2.1.0 (Direct Map Lookup) ---
-  console.log("[MCM SBA] Widget v2.1.0 Loaded");
+  // --- VERSION 2.2.0 (Global Fallback URL) ---
+  console.log("[MCM SBA] Widget v2.2.0 Loaded");
 
   const sessionId = getOrCreateSessionId_();
   injectCss_();
@@ -22,6 +22,16 @@
     const config = await getConfig_(clientId);
     if (!config || !config.ok) { return; }
 
+    // 1. FIND A DEFAULT CALENDAR URL
+    // If services don't have their own links, we need a backup.
+    // We check the config, or grab the first available link from the service list.
+    let defaultUrl = config.booking_url || config.calendar_url || "";
+    
+    if (!defaultUrl && Array.isArray(config.services)) {
+        const firstWithUrl = config.services.find(s => s.booking_url);
+        if (firstWithUrl) defaultUrl = firstWithUrl.booking_url;
+    }
+
     const theme = {
       color: config.brand_primary_color || "#111111",
       label: (config.primary_cta_label || config.brand_button_label || "Get Scheduled"),
@@ -30,16 +40,12 @@
       bookingMode: config.booking_mode || "both",
       services: Array.isArray(config.services) ? config.services : [],
       phone: String(config.business_phone || config.phone_number || config.phone || "").trim(),
+      defaultUrl: defaultUrl // Store the fallback
     };
 
-    // 1. CREATE A SERVICE MAP (The "Dictionary")
-    // This creates a reliable way to look up services by a clean ID string
-    const serviceMap = {};
+    // 2. ASSIGN INDEXES (Robust Lookup)
     theme.services.forEach((s, i) => {
-        // Generate a safe ID if missing
-        const safeId = (s.id !== undefined && s.id !== null) ? String(s.id) : ("svc_" + i);
-        s._safeId = safeId; // Store it on the object
-        serviceMap[safeId] = s; // Add to dictionary
+        s._idx = i; 
     });
 
     const state = { 
@@ -50,16 +56,16 @@
     if (inlineSelector) {
       const mount = document.querySelector(inlineSelector);
       if (mount) {
-        renderInline_(mount, theme, state, serviceMap);
+        renderInline_(mount, theme, state);
         postEvent_("widget_render_inline", {});
       }
     } else {
-      renderFloating_(theme, state, serviceMap);
+      renderFloating_(theme, state);
       postEvent_("widget_render_floating", {});
     }
   }
 
-  function renderFloating_(theme, state, serviceMap) {
+  function renderFloating_(theme, state) {
     const launcher = document.createElement("div");
     launcher.id = "mcm-sba-launcher";
     const iconSvg = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>`;
@@ -78,7 +84,7 @@
     panel.id = "mcm-sba-panel";
     document.body.appendChild(panel);
 
-    const ui = bindPanelLogic_(panel, theme, state, serviceMap);
+    const ui = bindPanelLogic_(panel, theme, state);
 
     const toggle = (isOpen) => {
         const method = isOpen ? "add" : "remove";
@@ -94,16 +100,16 @@
     ui.render();
   }
 
-  function renderInline_(mount, theme, state, serviceMap) {
+  function renderInline_(mount, theme, state) {
     const panel = document.createElement("div");
     panel.id = "mcm-sba-panel";
     panel.className = "mcm-sba-inline-panel";
     mount.appendChild(panel);
-    const ui = bindPanelLogic_(panel, theme, state, serviceMap);
+    const ui = bindPanelLogic_(panel, theme, state);
     ui.render();
   }
 
-  function bindPanelLogic_(panel, theme, state, serviceMap) {
+  function bindPanelLogic_(panel, theme, state) {
     panel.innerHTML = `
       <div class="mcm-sba-header">
         <button class="mcm-sba-back" style="display:none;">‹</button>
@@ -146,7 +152,7 @@
         if (!btn) return;
 
         const action = btn.dataset.action;
-        const payload = btn.dataset.payload; // This is the ID string
+        const payload = btn.dataset.payload;
 
         console.log("[MCM SBA] Action:", action, "Payload:", payload);
 
@@ -173,20 +179,29 @@
                 render();
             }
             else if (action === "select-service") {
-                // LOOKUP VIA MAP (Fast & Reliable)
-                const svc = serviceMap[payload];
-                console.log("[MCM SBA] Service Found:", svc);
-
+                // 1. Find the Service
+                const idx = parseInt(payload, 10);
+                const svc = theme.services[idx];
+                
                 state.data.service = svc || null;
                 state.data.serviceLabel = svc ? svc.label : "General";
                 postEvent_("service_selected", { service_id: svc ? svc.id : "" });
 
-                // Logic: Has Calendar -> Booking. No Calendar -> Request.
-                if (svc && svc.booking_url) {
-                    console.log("[MCM SBA] Going to Booking URL:", svc.booking_url);
+                // 2. DETERMINE URL (The Fix)
+                // Check specific service URL -> Then check global default
+                let targetUrl = (svc ? svc.booking_url : "") || theme.defaultUrl;
+                
+                console.log("[MCM SBA] Target URL:", targetUrl);
+
+                // 3. Route
+                if (targetUrl) {
+                    // Temporarily attach the fallback URL to the service object for the view to use
+                    if (state.data.service) state.data.service.booking_url = targetUrl;
+                    else state.data.service = { label: "Booking", booking_url: targetUrl };
+                    
                     state.stack.push("booking");
                 } else {
-                    console.log("[MCM SBA] No URL, going to Request Form");
+                    console.warn("[MCM SBA] No URL found anywhere. Falling back to form.");
                     state.stack.push("request");
                 }
                 render();
@@ -209,7 +224,6 @@
             }
         } catch (err) {
             console.error("[MCM SBA Error]", err);
-            // Emergency fallback
             state.stack.push("request");
             render();
         }
@@ -237,13 +251,12 @@
       els.title.textContent = theme.business;
       els.step.textContent = "Step 2 of 3";
       
-      // Filter out 'Emergency' labels from the standard weekly list
       const services = theme.services.filter(s => !/emergency|urgent/i.test(s.label));
 
       els.body.innerHTML = `
         <div class="mcm-sba-muted" style="margin-bottom:10px;">Choose what you need help with:</div>
         <div class="mcm-sba-list">
-            ${services.map(s => renderRowItem_("select-service", s._safeId, null, s.label, s.description)).join("")}
+            ${services.map(s => renderRowItem_("select-service", s._idx, null, s.label, s.description)).join("")}
             <button class="mcm-sba-rowitem" data-action="manual-request">
                 <div>Something else?</div><span>›</span>
             </button>
@@ -271,7 +284,6 @@
       
       const isHot = data.urgency === "today";
       
-      // Dynamic Labels
       const detailsLabel = isHot ? "Critical Issue Details" : "Details";
       const detailsPlace = isHot ? "Please describe the critical issue..." : "How can we help?";
 
@@ -314,7 +326,6 @@
       els.back.style.display = "none";
   }
 
-  // --- HELPERS ---
   function renderRowItem_(action, payload, color, title, sub) {
       const dot = color ? `<div style="background:${color}; width:12px; height:12px; border-radius:50%; margin-right:12px; flex-shrink:0;"></div>` : "";
       return `
@@ -359,7 +370,6 @@
       }
   }
 
-  // --- UTILS ---
   async function getConfig_(client) {
     const api = document.currentScript.getAttribute("data-api").replace(/\/$/, "");
     try { return await (await fetch(`${api}?action=config&client=${client}`)).json(); } catch(e){ return {ok:false}; }

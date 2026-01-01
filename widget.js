@@ -4,381 +4,461 @@
 
   const clientId = SCRIPT.getAttribute("data-client") || "";
   const apiBase = (SCRIPT.getAttribute("data-api") || "").replace(/\/$/, "");
-  const inlineSelector = SCRIPT.getAttribute("data-inline") || ""; 
+  const inlineSelector = SCRIPT.getAttribute("data-inline") || ""; // e.g. "#mcm-sba-inline"
 
   if (!clientId || !apiBase) {
     console.warn("[MCM SBA] Missing data-client or data-api");
     return;
   }
 
-  // --- VERSION 2.7.0 (Fully Custom Text) ---
-  console.log("[MCM SBA] Widget v2.7.0 Loaded");
-
+  const VERSION = "0.1.0";
   const sessionId = getOrCreateSessionId_();
+
   injectCss_();
+
+  // Boot
   boot_().catch(err => console.error("[MCM SBA] boot error", err));
 
   async function boot_() {
     const config = await getConfig_(clientId);
-    if (!config || !config.ok) { return; }
-
-    let defaultUrl = config.booking_url || config.calendar_url || "";
-    if (!defaultUrl && Array.isArray(config.services)) {
-        const firstWithUrl = config.services.find(s => s.booking_url);
-        if (firstWithUrl) defaultUrl = firstWithUrl.booking_url;
+    if (!config || !config.ok) {
+      console.warn("[MCM SBA] Config load failed", config);
+      return;
     }
 
     const theme = {
       color: config.brand_primary_color || "#111111",
+      // Floating launcher button label (per-client override)
       label: (config.primary_cta_label || config.brand_button_label || "Get Scheduled"),
+      // Primary CTA used inside the panel for request-mode buttons
       primaryCta: (config.primary_cta_label || "Get Scheduled"),
       business: config.business_name || "Appointments",
       bookingMode: config.booking_mode || "both",
       services: Array.isArray(config.services) ? config.services : [],
       phone: String(config.business_phone || config.phone_number || config.phone || "").trim(),
-      defaultUrl: defaultUrl,
-      showUrgentMenu: config.show_urgent_menu === true,
-      text: config.menu_text || {} // LOAD CUSTOM TEXT
     };
 
-    const serviceMap = {};
-    theme.services.forEach((s, i) => {
-        const safeId = (s.id !== undefined && s.id !== null) ? String(s.id) : ("svc_" + i);
-        s._safeId = safeId; 
-        s._idx = i;
-        serviceMap[safeId] = s;
-    });
-
-    const state = { 
-      stack: ["home"], 
-      data: { urgency: "", urgencyLabel: "", service: null }
-    };
+    const state = { urgencyKey: "", urgencyLabel: "" };
 
     if (inlineSelector) {
       const mount = document.querySelector(inlineSelector);
-      if (mount) {
-        renderInline_(mount, theme, state, serviceMap);
-        postEvent_("widget_render_inline", {});
+      if (!mount) {
+        console.warn("[MCM SBA] Inline mount not found:", inlineSelector);
+        return;
       }
+      renderInline_(mount, theme, state);
+      postEvent_("widget_render_inline", {});
     } else {
-      renderFloating_(theme, state, serviceMap);
+      renderFloating_(theme, state);
       postEvent_("widget_render_floating", {});
     }
   }
 
-  function renderFloating_(theme, state, serviceMap) {
+  function renderFloating_(theme, state) {
     const launcher = document.createElement("div");
     launcher.id = "mcm-sba-launcher";
-    const iconSvg = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>`;
-    
-    launcher.innerHTML = `
-      <button class="mcm-sba-btn" style="background:${theme.color}; color:#fff;">
-        ${iconSvg}<span>${theme.label}</span>
-      </button>`;
+
+    const btn = document.createElement("button");
+    btn.className = "mcm-sba-btn";
+    btn.textContent = theme.label;
+    btn.style.background = theme.color;
+    btn.style.color = "#fff";
+
+    launcher.appendChild(btn);
     document.body.appendChild(launcher);
 
     const overlay = document.createElement("div");
     overlay.id = "mcm-sba-overlay";
     document.body.appendChild(overlay);
 
-    const panel = document.createElement("div");
-    panel.id = "mcm-sba-panel";
+    const panel = buildPanel_(theme, { state });
     document.body.appendChild(panel);
 
-    const ui = bindPanelLogic_(panel, theme, state, serviceMap);
-
-    const toggle = (isOpen) => {
-        const method = isOpen ? "add" : "remove";
-        overlay.classList[method]("open");
-        panel.classList[method]("open");
-        if(isOpen) postEvent_("widget_open", {});
+    const open = () => {
+      overlay.style.display = "block";
+      panel.classList.add("open");
+      postEvent_("widget_open", {});
+    };
+    const close = () => {
+      overlay.style.display = "none";
+      panel.classList.remove("open");
+      postEvent_("widget_close", {});
     };
 
-    launcher.querySelector("button").onclick = () => toggle(true);
-    overlay.onclick = () => toggle(false);
-    ui.closeBtn.onclick = () => toggle(false);
-    
-    ui.render();
+    btn.addEventListener("click", open);
+    overlay.addEventListener("click", close);
+    panel.querySelector(".mcm-sba-close").addEventListener("click", close);
   }
 
-  function renderInline_(mount, theme, state, serviceMap) {
+  function renderInline_(mount, theme, state) {
+    const panel = buildPanel_(theme, { inline: true, state });
+    panel.style.position = "relative";
+    panel.style.transform = "none";
+    panel.style.height = "auto";
+    panel.style.width = "100%";
+    panel.style.borderRadius = "18px";
+    panel.style.boxShadow = "0 10px 25px rgba(0,0,0,.10)";
+    panel.classList.add("open");
+    mount.appendChild(panel);
+  }
+
+  function buildPanel_(theme, opts = {}) {
     const panel = document.createElement("div");
     panel.id = "mcm-sba-panel";
-    panel.className = "mcm-sba-inline-panel";
-    mount.appendChild(panel);
-    const ui = bindPanelLogic_(panel, theme, state, serviceMap);
-    ui.render();
-  }
 
-  function bindPanelLogic_(panel, theme, state, serviceMap) {
     panel.innerHTML = `
       <div class="mcm-sba-header">
-        <button class="mcm-sba-back" style="display:none;">‹</button>
         <div>
           <p class="mcm-sba-title">${escapeHtml_(theme.business)}</p>
-          <p class="mcm-sba-step">Step 1 of 3</p>
+          <p class="mcm-sba-sub">Book instantly or get scheduled — we’ll route it right away.</p>
         </div>
-        <button class="mcm-sba-close">×</button>
+        <button class="mcm-sba-close" aria-label="Close">×</button>
       </div>
-      <div class="mcm-sba-body"></div>
-      <div class="mcm-sba-footer" style="display:none;"></div>
+      <div class="mcm-sba-body">
+        <div class="mcm-sba-card" id="mcm-sba-step"></div>
+      </div>
     `;
 
-    const els = {
-        title: panel.querySelector(".mcm-sba-title"),
-        step: panel.querySelector(".mcm-sba-step"),
-        back: panel.querySelector(".mcm-sba-back"),
-        close: panel.querySelector(".mcm-sba-close"),
-        body: panel.querySelector(".mcm-sba-body"),
-        footer: panel.querySelector(".mcm-sba-footer")
+    const step = panel.querySelector("#mcm-sba-step");
+    renderUrgency_(step, theme, opts.state || { urgencyKey:"", urgencyLabel:"" });
+    return panel;
+  }
+
+
+  function renderUrgency_(container, theme, state) {
+    container.innerHTML = `
+      <div class="mcm-sba-muted"><b>Quick question</b> — how quickly do you need help?</div>
+      <div class="mcm-sba-actions" style="gap:8px; flex-direction:column; align-items:stretch;">
+        <button class="mcm-sba-btn" id="mcm-sba-urg-today" style="background:${escapeAttr_(theme.color)}; color:#fff;">Today (urgent)</button>
+        <button class="mcm-sba-secondary" id="mcm-sba-urg-week">This week</button>
+        <button class="mcm-sba-secondary" id="mcm-sba-urg-quote">Just looking for pricing</button>
+      </div>
+      <div id="mcm-sba-urg-extra" style="margin-top:10px;"></div>
+    `;
+
+    const setUrgency = (key, label) => {
+      state.urgencyKey = key;
+      state.urgencyLabel = label;
+      postEvent_("urgency_selected", { urgency: key, urgency_label: label });
+
+      // Optional HOT helper: show a call-now button if a phone number exists
+      const extra = container.querySelector("#mcm-sba-urg-extra");
+      if (key === "today" && theme.phone) {
+        extra.innerHTML = `
+          <div class="mcm-sba-card">
+            <b>Urgent request flagged as HOT</b><br/>
+            <span class="mcm-sba-muted">If this is an emergency, call now. Otherwise, continue to get scheduled.</span>
+            <div class="mcm-sba-actions" style="margin-top:10px;">
+              <a class="mcm-sba-btn" href="tel:${escapeAttr_(theme.phone)}" style="background:${escapeAttr_(theme.color)}; color:#fff; text-decoration:none; display:inline-block;">Call now</a>
+              <button class="mcm-sba-secondary" id="mcm-sba-urg-continue">Continue</button>
+            </div>
+          </div>
+        `;
+        container.querySelector("#mcm-sba-urg-continue").addEventListener("click", () => {
+          renderServicePicker_(container, theme, state);
+        });
+        return;
+      }
+
+      renderServicePicker_(container, theme, state);
     };
 
-    const render = () => {
-        const currentView = state.stack[state.stack.length - 1];
-        els.body.classList.remove("mcm-sba-no-pad"); 
-        els.footer.style.display = "none";
-        els.back.style.display = state.stack.length > 1 ? "inline-flex" : "none";
+    container.querySelector("#mcm-sba-urg-today").addEventListener("click", () => setUrgency("today", "Today (urgent)"));
+    container.querySelector("#mcm-sba-urg-week").addEventListener("click", () => setUrgency("week", "This week"));
+    container.querySelector("#mcm-sba-urg-quote").addEventListener("click", () => setUrgency("quote", "Just looking for pricing"));
+  }
 
-        if (currentView === "home") viewHome_(els, theme);
-        else if (currentView === "services") viewServices_(els, theme);
-        else if (currentView === "booking") viewBooking_(els, theme, state.data.service);
-        else if (currentView === "request") viewRequest_(els, theme, state.data);
-        else if (currentView === "success") viewSuccess_(els, theme);
-    };
+  function renderServicePicker_(container, theme, state) {
+    container.innerHTML = `
+      <div class="mcm-sba-muted">What would you like to book?</div>
+      <div style="margin-top:10px" id="mcm-sba-services"></div>
+      <div class="mcm-sba-actions">
+        <button class="mcm-sba-secondary" id="mcm-sba-request">Get Scheduled</button>
+      </div>
+    `;
 
-    panel.addEventListener("click", (e) => {
-        const btn = e.target.closest("[data-action]");
-        if (!btn) return;
-        const action = btn.dataset.action;
-        const payload = btn.dataset.payload;
+    const servicesEl = container.querySelector("#mcm-sba-services");
+    const requestBtn = container.querySelector("#mcm-sba-request");
 
-        try {
-            if (action === "back") {
-                if (state.stack.length > 1) state.stack.pop();
-                render();
-            } 
-            else if (action === "nav-urgent") {
-                state.data.urgency = "today";
-                state.data.urgencyLabel = theme.text.urgent.label; // Use Custom Label
-                state.stack.push("request");
-                render();
-            }
-            else if (action === "nav-standard") {
-                state.data.urgency = "standard";
-                state.data.urgencyLabel = theme.text.standard.label; // Use Custom Label
-                state.stack.push("services");
-                render();
-            }
-            else if (action === "nav-quote") {
-                state.data.urgency = "quote";
-                state.data.urgencyLabel = theme.text.quote.label; // Use Custom Label
-                state.stack.push("request");
-                render();
-            }
-            else if (action === "select-service") {
-                const svc = serviceMap[payload];
-                state.data.service = svc || null;
-                state.data.serviceLabel = svc ? svc.label : "General";
-                postEvent_("service_selected", { service_id: svc ? svc.id : "" });
-                let targetUrl = (svc ? svc.booking_url : "") || theme.defaultUrl;
-                if (targetUrl) {
-                    if (state.data.service) state.data.service.booking_url = targetUrl;
-                    else state.data.service = { label: "Booking", booking_url: targetUrl };
-                    state.stack.push("booking");
-                } else {
-                    state.stack.push("request");
-                }
-                render();
-            }
-            else if (action === "manual-request") {
-                state.data.service = null;
-                state.data.serviceLabel = "General Request";
-                state.stack.push("request");
-                render();
-            }
-            else if (action === "fallback") {
-                state.stack.push("request");
-                render();
-            }
-            else if (action === "submit") {
-                handleSubmit_(btn, theme, state, render);
-            }
-            else if (action === "close-overlay") {
-                 document.querySelector("#mcm-sba-overlay").click();
-            }
-        } catch (err) {
-            console.error("[MCM SBA Error]", err);
-            state.stack.push("request");
-            render();
+    // Match per-client CTA label
+    requestBtn.textContent = theme.primaryCta || "Get Scheduled";
+    // Hide request button if booking_mode is strictly instant
+    if (String(theme.bookingMode).toLowerCase() === "instant") {
+      requestBtn.style.display = "none";
+    }
+
+    theme.services.forEach(svc => {
+      const b = document.createElement("button");
+      b.className = "mcm-sba-service";
+      b.innerHTML = `
+        <div style="font-weight:800">${escapeHtml_(svc.label || "Service")}</div>
+        <div class="mcm-sba-muted">${escapeHtml_(svc.description || "")}</div>
+      `;
+      b.addEventListener("click", () => {
+        postEvent_("service_selected", { service_id: svc.id || "", service_label: svc.label || "" });
+
+        const bookingUrl = String(svc.booking_url || "").trim();
+        const canFallback = svc.request_fallback !== false;
+        const mode = String(theme.bookingMode || "both").toLowerCase();
+
+        // If a booking URL exists, show the embedded calendar/booking iframe
+        if (bookingUrl) {
+          renderBooking_(container, theme, svc, state);
+          return;
         }
+
+        // If no booking URL, automatically fall back to request flow (unless disabled / instant-only)
+        if (canFallback && mode !== "instant") {
+          postEvent_("request_mode_open", { service_id: svc.id || "", service_label: svc.label || "" });
+          renderRequestForm_(container, theme, svc, state);
+          return;
+        }
+
+        // Graceful fallback
+        container.innerHTML = `
+          <div class="mcm-sba-card">
+            <b>${escapeHtml_(svc.label || "Service")}</b><br/>
+            Online booking is not available for this service. Please contact us and we’ll help you get scheduled.
+          </div>
+          <div class="mcm-sba-actions">
+            <button class="mcm-sba-secondary" id="mcm-sba-back">Back</button>
+          </div>
+        `;
+        container.querySelector("#mcm-sba-back").addEventListener("click", () => renderServicePicker_(container, theme));
+      });servicesEl.appendChild(b);
     });
 
-    els.back.setAttribute("data-action", "back");
-    return { render, closeBtn: els.close };
-  }
-  
-  function viewHome_(els, theme) {
-      els.title.textContent = theme.business;
-      els.step.textContent = "Start";
-      
-      const txt = theme.text; // Short alias
-
-      if (theme.showUrgentMenu) {
-          // IT / URGENT MODE
-          els.body.innerHTML = `
-            <div class="mcm-sba-muted" style="margin-bottom:10px;"><b>Quick question</b> — how quickly do you need help?</div>
-            <div class="mcm-sba-list">
-                ${renderRowItem_("nav-urgent", "today", "#FF3B30", txt.urgent.label, txt.urgent.sub)}
-                ${renderRowItem_("nav-standard", "week", "#34C759", txt.standard.label, txt.standard.sub)}
-                ${renderRowItem_("nav-quote", "quote", "#007AFF", txt.quote.label, txt.quote.sub)}
-            </div>`;
-      } else {
-          // SPA / STANDARD MODE
-          els.body.innerHTML = `
-            <div class="mcm-sba-muted" style="margin-bottom:10px;">How can we help you today?</div>
-            <div class="mcm-sba-list">
-                ${renderRowItem_("nav-standard", "book", "#34C759", txt.book.label, txt.book.sub)}
-                ${renderRowItem_("nav-quote", "inquire", "#007AFF", txt.inquire.label, txt.inquire.sub)}
-            </div>`;
-      }
+    requestBtn.addEventListener("click", () => {
+      postEvent_("request_mode_open", {});
+      renderRequestForm_(container, theme, null, state);
+    });
   }
 
-  function viewServices_(els, theme) {
-      els.title.textContent = theme.business;
-      els.step.textContent = "Select Service";
-      const services = theme.services;
-      els.body.innerHTML = `
-        <div class="mcm-sba-muted" style="margin-bottom:10px;">Choose what you need help with:</div>
-        <div class="mcm-sba-list">
-            ${services.map(s => renderRowItem_("select-service", s._safeId, null, s.label, s.description)).join("")}
-            <button class="mcm-sba-rowitem" data-action="manual-request">
-                <div>Something else?</div><span>›</span>
-            </button>
-        </div>`;
+  function renderBooking_(container, theme, svc, state) {
+    const bookingUrl = String(svc.booking_url || "").trim();
+    const canFallback = svc.request_fallback !== false;
+
+    container.innerHTML = `
+      <div class="mcm-sba-muted"><b>${escapeHtml_(svc.label || "Booking")}</b></div>
+      ${bookingUrl ? `<iframe class="mcm-sba-iframe" src="${escapeAttr_(bookingUrl)}" loading="lazy"></iframe>` : `
+        <div class="mcm-sba-card">No booking link is configured for this service.</div>
+      `}
+      <div class="mcm-sba-actions">
+        <button class="mcm-sba-secondary" id="mcm-sba-back">Back</button>
+        <button class="mcm-sba-secondary" id="mcm-sba-done">Done</button>
+        ${canFallback ? `<button class="mcm-sba-primary" id="mcm-sba-request" style="background:${theme.color};color:#fff;">Can’t find a time? ${escapeHtml_(theme.primaryCta || "Get Scheduled")}</button>` : ""}
+      </div>
+    `;
+
+    // Track booking view (best-effort; true completion requires provider webhooks)
+    postEvent_("booking_opened", { service_id: svc.id || "", service_label: svc.label || "", urgency: state && state.urgencyKey || "", urgency_label: state && state.urgencyLabel || "" });
+
+    container.querySelector("#mcm-sba-back").addEventListener("click", () => {
+      renderServicePicker_(container, theme, state);
+    });
+
+    container.querySelector("#mcm-sba-done").addEventListener("click", () => {
+      const panel = container.closest("#mcm-sba-panel");
+      const closeBtn = panel && panel.querySelector(".mcm-sba-close");
+      if (closeBtn) closeBtn.click();
+    });
+
+    const req = container.querySelector("#mcm-sba-request");
+    if (req) {
+      req.addEventListener("click", () => {
+        postEvent_("request_fallback_opened", { service_id: svc.id || "", service_label: svc.label || "", urgency: state && state.urgencyKey || "", urgency_label: state && state.urgencyLabel || "" });
+        renderRequestForm_(container, theme, svc, state);
+      });
+    }
   }
 
-  function viewBooking_(els, theme, svc) {
-      const url = svc ? svc.booking_url : "";
-      els.title.textContent = "Select Time";
-      els.step.textContent = svc ? svc.label : "Booking";
-      els.body.classList.add("mcm-sba-no-pad"); 
-      els.body.innerHTML = `<iframe class="mcm-sba-iframe" src="${escapeAttr_(url)}" loading="lazy"></iframe>`;
-      els.footer.style.display = "block";
-      els.footer.innerHTML = `
-         <div class="mcm-sba-actions" style="margin-top:0;">
-             <button class="mcm-sba-secondary" data-action="fallback">Can't find a time?</button>
-         </div>`;
-  }
+  function renderRequestForm_(container, theme, svc, state) {
+    const serviceId = svc?.id || "";
+    const serviceLabel = svc?.label || "";
 
-  function viewRequest_(els, theme, data) {
-      els.title.textContent = "Final Step";
-      els.step.textContent = "Contact Info";
-      const isHot = data.urgency === "today";
-      const detailsLabel = isHot ? "Critical Issue Details" : "Details";
-      const detailsPlace = isHot ? "Please describe the critical issue..." : "How can we help?";
+    container.innerHTML = `
+      <div class="mcm-sba-muted"><b>${escapeHtml_(theme.primaryCta || "Get Scheduled")}</b> — we’ll contact you ASAP.${state && state.urgencyKey === "today" ? ` <span style="display:inline-block;margin-left:6px;padding:2px 8px;border-radius:999px;background:${escapeAttr_(theme.color)};color:#fff;font-size:12px;">HOT</span>` : ""}</div>
 
-      els.body.innerHTML = `
-          <div class="mcm-sba-muted" style="margin-bottom:10px;">
-            <b>${escapeHtml_(theme.primaryCta)}</b> — we’ll contact you ASAP.
-            ${isHot ? ` <span class="mcm-sba-pill" style="background:${theme.color};color:#fff;">HOT</span>` : ""}
-          </div>
-          <div class="mcm-sba-label">Name</div>
-          <input class="mcm-sba-input" id="mcm-name" placeholder="Full name" />
-          <div class="mcm-sba-row">
-            <div><div class="mcm-sba-label">Email</div><input class="mcm-sba-input" id="mcm-email" placeholder="you@email.com" /></div>
-            <div><div class="mcm-sba-label">Phone</div><input class="mcm-sba-input" id="mcm-phone" placeholder="(555) 123-4567" /></div>
-          </div>
-          <div class="mcm-sba-label">${detailsLabel}</div>
-          <textarea class="mcm-sba-input" id="mcm-msg" rows="3" placeholder="${detailsPlace}"></textarea>
-          <input id="mcm-hp" style="position:absolute; opacity:0; pointer-events:none; width:1px;" tabindex="-1" />
-      `;
-      els.footer.style.display = "block";
-      els.footer.innerHTML = `
-        <div class="mcm-sba-actions">
-            <button class="mcm-sba-primary" data-action="submit" style="background:${theme.color};color:#fff;">Send Request</button>
+      <div class="mcm-sba-label">Name</div>
+      <input class="mcm-sba-input" id="mcm-name" placeholder="Full name" />
+
+      <div class="mcm-sba-row">
+        <div>
+          <div class="mcm-sba-label">Email</div>
+          <input class="mcm-sba-input" id="mcm-email" placeholder="you@email.com" />
         </div>
-        <div class="mcm-sba-muted" id="mcm-status" style="margin-top:10px; text-align:center;"></div>
-      `;
-  }
+        <div>
+          <div class="mcm-sba-label">Phone</div>
+          <input class="mcm-sba-input" id="mcm-phone" placeholder="(707) 555-1212" />
+        </div>
+      </div>
 
-  function viewSuccess_(els, theme) {
-      els.title.textContent = "Received";
-      els.step.textContent = "";
-      els.body.innerHTML = `
-        <div class="mcm-sba-card" style="text-align:center; padding:30px 20px;">
-            <div style="font-size:40px; margin-bottom:10px;">✅</div>
-            <div style="font-weight:700; font-size:18px;">Received!</div>
-            <div class="mcm-sba-muted" style="margin-top:5px;">We will be in touch shortly.</div>
-        </div>`;
-      els.footer.style.display = "block";
-      els.footer.innerHTML = `<button class="mcm-sba-secondary" data-action="close-overlay">Close</button>`;
-      els.back.style.display = "none";
-  }
+      <div class="mcm-sba-label">Preferred time</div>
+      <input class="mcm-sba-input" id="mcm-time" placeholder="Tomorrow afternoon / ASAP / next week" />
 
-  function renderRowItem_(action, payload, color, title, sub) {
-      const dot = color ? `<div style="background:${color}; width:12px; height:12px; border-radius:50%; margin-right:12px; flex-shrink:0;"></div>` : "";
-      return `
-        <button class="mcm-sba-rowitem" data-action="${action}" data-payload="${escapeAttr_(String(payload))}" style="display:flex; align-items:center;">
-          ${dot}
-          <div style="flex:1;">${escapeHtml_(title)} <span class="mcm-sba-muted" style="display:block; font-size:13px; margin-top:2px;">${escapeHtml_(sub||"")}</span></div>
-          <span>›</span>
-        </button>`;
-  }
+      <div class="mcm-sba-label">What’s going on?</div>
+      <textarea class="mcm-sba-input" id="mcm-msg" rows="4" placeholder="Quick details help us route this properly"></textarea>
 
-  async function handleSubmit_(btn, theme, state, renderFn) {
-      btn.textContent = "Sending...";
-      btn.disabled = true;
-      const val = (id) => (document.querySelector(id)||{}).value||"";
+      <!-- Honeypot (spam trap): keep hidden -->
+      <div style="position:absolute;left:-5000px;top:auto;width:1px;height:1px;overflow:hidden;">
+        <label>Company website</label>
+        <input id="mcm-hp" />
+      </div>
+
+      <div class="mcm-sba-actions">
+        <button class="mcm-sba-secondary" id="mcm-back">Back</button>
+        <button class="mcm-sba-primary" id="mcm-send" style="background:${theme.color};color:#fff;">Send request</button>
+      </div>
+
+      <div class="mcm-sba-muted" id="mcm-status" style="margin-top:10px;"></div>
+    `;
+
+    container.querySelector("#mcm-back").addEventListener("click", () => {
+      renderServicePicker_(container, theme, state);
+    });
+
+    container.querySelector("#mcm-send").addEventListener("click", async () => {
+      const name = val_("#mcm-name");
+      const email = val_("#mcm-email");
+      const phone = val_("#mcm-phone");
+      const preferred_time = val_("#mcm-time");
+      const message = val_("#mcm-msg");
+      const hp = val_("#mcm-hp");
+
+      const status = container.querySelector("#mcm-status");
+      status.textContent = "Sending…";
+
       const payload = {
         client_id: clientId,
-        session_id: getOrCreateSessionId_(),
-        intent: state.data.urgency === "today" ? "urgent" : "request",
-        service_id: state.data.service ? state.data.service.id : "",
-        service_label: state.data.serviceLabel || "General",
-        name: val("#mcm-name"),
-        email: val("#mcm-email"),
-        phone: val("#mcm-phone"),
-        message: val("#mcm-msg"),
-        company_website: val("#mcm-hp"),
-        source_url: location.href
+        session_id: sessionId,
+        intent: (state && state.urgencyKey === "today") ? "urgent" : "request",
+        service_id: serviceId,
+        service_label: serviceLabel,
+        name,
+        email,
+        phone,
+        preferred_time,
+        message,
+        company_website: hp,
+        source_url: location.href,
+        referrer: document.referrer || ""
       };
-      try {
-          const api = apiBase.replace(/\/$/, "");
-          const res = await fetch(`${api}?action=lead`, {method:"POST", body:JSON.stringify(payload)});
-          const json = await res.json();
-          if (json.ok) {
-              state.stack = ["success"];
-              renderFn();
-          } else { throw new Error("API Error"); }
-      } catch (e) {
-          btn.textContent = "Try Again";
-          btn.disabled = false;
-          document.querySelector("#mcm-status").textContent = "Connection error. Please call us.";
+
+      const res = await postLead_(payload);
+      if (res && res.ok) {
+        postEvent_("lead_submitted", { intent: (state && state.urgencyKey === "today") ? "urgent" : "request", lead_id: res.lead_id || "" });
+        status.textContent = "✅ Sent. We’ll reach out shortly.";
+      } else {
+        status.textContent = "⚠️ Something went wrong. Please try again.";
       }
+    });
   }
 
   async function getConfig_(client) {
-    const api = apiBase.replace(/\/$/, "");
-    try { return await (await fetch(`${api}?action=config&client=${client}`)).json(); } catch(e){ return {ok:false}; }
+    const url = `${apiBase}?action=config&client=${encodeURIComponent(client)}`;
+    const r = await fetch(url, { method: "GET" });
+    return await r.json();
   }
-  function postEvent_(name, meta) {
-      const api = apiBase.replace(/\/$/, "");
-      const clientId = clientId;
-      fetch(`${api}?action=event`, {method:"POST", body:JSON.stringify({client_id:clientId, session_id:sessionId, event_name:name, meta})}).catch(()=>{});
+
+  async function postEvent_(event_name, meta) {
+    try {
+      const url = `${apiBase}?action=event`;
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: clientId,
+          session_id: sessionId,
+          event_name,
+          service_id: meta?.service_id || "",
+          meta: { ...meta, v: VERSION },
+          source_url: location.href,
+          referrer: document.referrer || ""
+        })
+      });
+    } catch (_) {}
   }
+
+  async function postLead_(payload) {
+    try {
+      const url = `${apiBase}?action=lead`;
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      return await r.json();
+    } catch (_) {
+      return { ok: false };
+    }
+  }
+
   function injectCss_() {
-    const s = document.currentScript;
-    const url = s.getAttribute("data-css") || s.src.replace(/\.js$/, ".css");
+    const href = SCRIPT.getAttribute("data-css") || "";
+    if (href) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = href;
+      document.head.appendChild(link);
+      return;
+    }
+
+    // Default assumes widget.css is alongside widget.js
+    const jsUrl = new URL(SCRIPT.src);
+    jsUrl.pathname = jsUrl.pathname.replace(/widget\.js$/, "widget.css");
     const link = document.createElement("link");
-    link.rel="stylesheet"; link.href=url;
+    link.rel = "stylesheet";
+    link.href = jsUrl.toString();
     document.head.appendChild(link);
   }
-  function getOrCreateSessionId_() {
-      let sid = localStorage.getItem("mcm_sba_sid");
-      if(!sid) { sid="s_"+Math.random().toString(36).slice(2); localStorage.setItem("mcm_sba_sid", sid); }
-      return sid;
-  }
-  function escapeHtml_(s) { return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-  function escapeAttr_(s) { return String(s||"").replace(/"/g,"&quot;"); }
 
+  function getOrCreateSessionId_() {
+    const key = "mcm_sba_session_id";
+    try {
+      const existing = localStorage.getItem(key);
+      if (existing) return existing;
+      const sid = "s_" + Math.random().toString(16).slice(2) + Date.now().toString(16);
+      localStorage.setItem(key, sid);
+      return sid;
+    } catch (_) {
+      return "s_" + Math.random().toString(16).slice(2);
+    }
+  }
+
+  function val_(sel) {
+    const el = document.querySelector(sel);
+    return el ? String(el.value || "").trim() : "";
+  }
+
+  function escapeHtml_(s) {
+    return String(s || "").replace(/[&<>"']/g, c => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+    }[c]));
+  }
+
+  function escapeAttr_(s) {
+    return String(s || "").replace(/"/g, "%22");
+  }
 })();
+    // Normalize service fields for maximum compatibility across templates
+    // Accepts booking_url, bookingUrl, calendar_url, url; trims whitespace.
+    theme.services = (Array.isArray(theme.services) ? theme.services : []).map((s) => {
+      try {
+        const obj = (s && typeof s === "object") ? s : {};
+        const rawUrl = (obj.booking_url || obj.bookingUrl || obj.calendar_url || obj.url || obj.link || "");
+        obj.booking_url = String(rawUrl || "").trim();
+        // normalize boolean-ish flags
+        if (obj.request_fallback !== undefined) {
+          const rf = obj.request_fallback;
+          obj.request_fallback = (rf === true || String(rf).toLowerCase().trim() === "true");
+        }
+        if (obj.id !== undefined && obj.id !== null) obj.id = String(obj.id);
+        if (obj.label !== undefined && obj.label !== null) obj.label = String(obj.label);
+        if (obj.description !== undefined && obj.description !== null) obj.description = String(obj.description);
+        return obj;
+      } catch (_) {
+        return s;
+      }
+    });
+
+

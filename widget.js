@@ -1,4 +1,4 @@
-/* MCM Smart Booking Assistant — Apple UI + Production Logic (v3.0.1)
+/* MCM Smart Booking Assistant — Apple UI + Production Logic (v3.0.2)
    - Preserves Apple-style UI (launcher, overlay, panel, list rows)
    - Fixes Calendly routing for "This week" (standard) services
    - Keeps "Urgent — today" -> HOT lead capture (request) by design
@@ -252,6 +252,7 @@
             else state.data.service = { id: "booking", label: "Booking", booking_url: targetUrl };
 
             state.data.bookingAttemptLogged = false;
+            postBookingAttempt_(state.data.service, targetUrl);
             state.stack.push("booking");
           } else {
             // request path
@@ -368,31 +369,8 @@
       iframe.style.border = "0";
       iframe.setAttribute("title", "Scheduling");
       iframe.setAttribute("allow", "clipboard-write; fullscreen");
+
     }
-
-
-    // Lite tracking: log "booking attempt" once per booking view (Calendly opened)
-    try {
-      if (svc && !state.data.bookingAttemptLogged) {
-        state.data.bookingAttemptLogged = true;
-        fetch(`${apiBase}?action=booking_attempt`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            client_id: clientId,
-            session_id: sessionId,
-            intent: "booking",
-            service_id: String(svc.id || ""),
-            service_label: String(svc.label || ""),
-            calendly_url: String(url || ""),
-            timeframe: String(state.data.urgencyLabel || state.data.urgency || "This week"),
-            source_url: location.href,
-            referrer: document.referrer || "",
-            note: "Booking attempt (Calendly opened)"
-          })
-        }).catch(() => {});
-      }
-    } catch (_) {}
 
     els.footer.style.display = "block";
     els.footer.innerHTML = `
@@ -561,6 +539,35 @@
       })
     }).catch(() => {});
   }
+
+  function postBookingAttempt_(svc, bookingUrl) {
+    try {
+      if (!svc || !bookingUrl) return;
+      if (state.data.bookingAttemptLogged) return;
+
+      state.data.bookingAttemptLogged = true;
+      const timeframe = state.data.urgencyLabel || state.data.urgency || "";
+
+      fetch(`${apiBase}?action=booking_attempt`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          client_id: clientId,
+          session_id: sessionId,
+          intent: "booking",
+          service_id: String(svc.id || ""),
+          service_label: String(svc.label || ""),
+          booking_url: String(bookingUrl || ""),
+          timeframe: String(timeframe || ""),
+          source_url: location.href,
+          referrer: document.referrer || ""
+        })
+      }).catch(() => {});
+    } catch (_) {
+      // never block UI
+    }
+  }
+
 
   // ---------- NORMALIZATION ----------
   function normalizeService_(s, i) {

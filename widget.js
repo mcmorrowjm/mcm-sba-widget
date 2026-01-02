@@ -1,308 +1,394 @@
+/* MCM Smart Booking Assistant — Apple UI + Production Logic (v3.0.0)
+   - Preserves Apple-style UI (launcher, overlay, panel, list rows)
+   - Fixes Calendly routing for "This week" (standard) services
+   - Keeps "Urgent — today" -> HOT lead capture (request) by design
+   - Uses config.menu_text defaults if blank
+   - Uses config.show_urgent_menu to toggle first menu
+   - NO runtime document.currentScript usage (only at boot)
+*/
+
 (() => {
   const SCRIPT = document.currentScript;
   if (!SCRIPT) return;
 
-  const clientId = SCRIPT.getAttribute("data-client") || "";
-  const apiBase = (SCRIPT.getAttribute("data-api") || "").replace(/\/$/, "");
-  const inlineSelector = SCRIPT.getAttribute("data-inline") || ""; // e.g. "#mcm-sba-inline"
+  const clientId = (SCRIPT.getAttribute("data-client") || "").trim();
+  const apiBase = (SCRIPT.getAttribute("data-api") || "").replace(/\/$/, "").trim();
+  const inlineSelector = (SCRIPT.getAttribute("data-inline") || "").trim();
 
   if (!clientId || !apiBase) {
     console.warn("[MCM SBA] Missing data-client or data-api");
     return;
   }
 
-  const VERSION = "0.1.0";
   const sessionId = getOrCreateSessionId_();
-
   injectCss_();
 
-  // Boot
-  boot_().catch(err => console.error("[MCM SBA] boot error", err));
+  boot_().catch((err) => console.error("[MCM SBA] boot error", err));
 
   async function boot_() {
     const config = await getConfig_(clientId);
-    if (!config || !config.ok) {
-      console.warn("[MCM SBA] Config load failed", config);
-      return;
+    if (!config || !config.ok) return;
+
+    // Normalize services (ID + booking_url + request_fallback)
+    const rawServices = Array.isArray(config.services) ? config.services : [];
+    const services = rawServices
+      .map((s, i) => normalizeService_(s, i))
+      .filter((s) => s && typeof s === "object");
+
+    // Default booking URL: prefer config.booking_url, else first service booking_url
+    let defaultUrl = String(config.booking_url || config.calendar_url || "").trim();
+    if (!defaultUrl) {
+      const firstWithUrl = services.find((s) => String(s.booking_url || "").trim());
+      if (firstWithUrl) defaultUrl = String(firstWithUrl.booking_url || "").trim();
     }
 
     const theme = {
-      color: config.brand_primary_color || "#111111",
-      // Floating launcher button label (per-client override)
-      label: (config.primary_cta_label || config.brand_button_label || "Get Scheduled"),
-      // Primary CTA used inside the panel for request-mode buttons
-      primaryCta: (config.primary_cta_label || "Get Scheduled"),
-      business: config.business_name || "Appointments",
-      bookingMode: config.booking_mode || "both",
-      services: Array.isArray(config.services) ? config.services : [],
-      // Global fallback booking URL (first valid Calendly link)
-      defaultUrl: String(config.booking_url || config.calendar_url || config.bookingUrl || "").trim(),
+      color: String(config.brand_primary_color || "#111111").trim(),
+      label: String(config.primary_cta_label || config.brand_button_label || "Get Scheduled").trim(),
+      primaryCta: String(config.primary_cta_label || "Get Scheduled").trim(),
+      business: String(config.business_name || "Appointments").trim(),
+      bookingMode: String(config.booking_mode || "both").trim(),
+      services,
       phone: String(config.business_phone || config.phone_number || config.phone || "").trim(),
+      defaultUrl,
+      showUrgentMenu: normalizeBool_(config.show_urgent_menu),
+      text: (config.menu_text && typeof config.menu_text === "object") ? config.menu_text : {}
     };
 
-    // --- Service normalization (fixes "no calendar" when booking_url is present but under a different key) ---
-    theme.services = theme.services.map((svc, i) => {
-      const obj = (svc && typeof svc === "object") ? svc : {};
-      if (obj.id !== undefined && obj.id !== null) obj.id = String(obj.id);
-      else obj.id = "svc_" + i;
+    // Build robust service map: map by multiple keys
+    const serviceMap = {};
+    theme.services.forEach((s, i) => {
+      const id = String(s.id || `svc_${i}`);
+      const idxId = String(s._idxId || `svc_${i}`);
+      const safeId = String(s._safeId || id);
+      s.id = id;
+      s._safeId = safeId;
+      s._idxId = idxId;
 
-      const rawUrl = (obj.booking_url || obj.bookingUrl || obj.calendar_url || obj.url || obj.link || "");
-      obj.booking_url = String(rawUrl || "").trim();
-
-      // If a service has no specific URL, fall back to the global booking URL (unless it explicitly requests fallback)
-      if (!obj.booking_url && theme.defaultUrl && !obj.request_fallback) {
-        obj.booking_url = theme.defaultUrl;
-      }
-      return obj;
+      serviceMap[id] = s;
+      serviceMap[safeId] = s;
+      serviceMap[idxId] = s;
     });
 
-    // If we still don't have a global default URL, derive it from the first service with a URL
-    if (!theme.defaultUrl) {
-      const first = theme.services.find(s => s && s.booking_url);
-      if (first) theme.defaultUrl = String(first.booking_url).trim();
-    }
-
-    const state = { urgencyKey: "", urgencyLabel: "" };
+    const state = {
+      stack: ["home"],
+      data: {
+        urgency: "",           // "today" | "standard" | "quote"
+        urgencyLabel: "",
+        service: null,
+        serviceLabel: ""
+      }
+    };
 
     if (inlineSelector) {
       const mount = document.querySelector(inlineSelector);
-      if (!mount) {
-        console.warn("[MCM SBA] Inline mount not found:", inlineSelector);
+      if (mount) {
+        renderInline_(mount, theme, state, serviceMap);
+        postEvent_("widget_render_inline", {});
         return;
       }
-      renderInline_(mount, theme, state);
-      postEvent_("widget_render_inline", {});
-    } else {
-      renderFloating_(theme, state);
-      postEvent_("widget_render_floating", {});
     }
+
+    renderFloating_(theme, state, serviceMap);
+    postEvent_("widget_render_floating", {});
   }
 
-  function renderFloating_(theme, state) {
+  // ---------- RENDER: Floating ----------
+  function renderFloating_(theme, state, serviceMap) {
     const launcher = document.createElement("div");
     launcher.id = "mcm-sba-launcher";
 
-    const btn = document.createElement("button");
-    btn.className = "mcm-sba-btn";
-    btn.textContent = theme.label;
-    btn.style.background = theme.color;
-    btn.style.color = "#fff";
+    const iconSvg =
+      `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px">
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+        <line x1="16" y1="2" x2="16" y2="6"></line>
+        <line x1="8" y1="2" x2="8" y2="6"></line>
+        <line x1="3" y1="10" x2="21" y2="10"></line>
+      </svg>`;
 
-    launcher.appendChild(btn);
+    launcher.innerHTML = `
+      <button class="mcm-sba-btn" style="background:${escapeAttr_(theme.color)}; color:#fff;">
+        ${iconSvg}<span>${escapeHtml_(theme.label)}</span>
+      </button>
+    `;
     document.body.appendChild(launcher);
 
     const overlay = document.createElement("div");
     overlay.id = "mcm-sba-overlay";
     document.body.appendChild(overlay);
 
-    const panel = buildPanel_(theme, { state });
-    document.body.appendChild(panel);
-
-    const open = () => {
-      overlay.style.display = "block";
-      panel.classList.add("open");
-      postEvent_("widget_open", {});
-    };
-    const close = () => {
-      overlay.style.display = "none";
-      panel.classList.remove("open");
-      postEvent_("widget_close", {});
-    };
-
-    btn.addEventListener("click", open);
-    overlay.addEventListener("click", close);
-    panel.querySelector(".mcm-sba-close").addEventListener("click", close);
-  }
-
-  function renderInline_(mount, theme, state) {
-    const panel = buildPanel_(theme, { inline: true, state });
-    panel.style.position = "relative";
-    panel.style.transform = "none";
-    panel.style.height = "auto";
-    panel.style.width = "100%";
-    panel.style.borderRadius = "18px";
-    panel.style.boxShadow = "0 10px 25px rgba(0,0,0,.10)";
-    panel.classList.add("open");
-    mount.appendChild(panel);
-  }
-
-  function buildPanel_(theme, opts = {}) {
     const panel = document.createElement("div");
     panel.id = "mcm-sba-panel";
+    document.body.appendChild(panel);
 
-    panel.innerHTML = `
-      <div class="mcm-sba-header">
-        <div>
-          <p class="mcm-sba-title">${escapeHtml_(theme.business)}</p>
-          <p class="mcm-sba-sub">Book instantly or get scheduled — we’ll route it right away.</p>
-        </div>
-        <button class="mcm-sba-close" aria-label="Close">×</button>
-      </div>
-      <div class="mcm-sba-body">
-        <div class="mcm-sba-card" id="mcm-sba-step"></div>
-      </div>
-    `;
+    const ui = bindPanelLogic_(panel, theme, state, serviceMap);
 
-    const step = panel.querySelector("#mcm-sba-step");
-    renderUrgency_(step, theme, opts.state || { urgencyKey:"", urgencyLabel:"" });
-    return panel;
-  }
-
-
-  function renderUrgency_(container, theme, state) {
-    container.innerHTML = `
-      <div class="mcm-sba-muted"><b>Quick question</b> — how quickly do you need help?</div>
-      <div class="mcm-sba-actions" style="gap:8px; flex-direction:column; align-items:stretch;">
-        <button class="mcm-sba-btn" id="mcm-sba-urg-today" style="background:${escapeAttr_(theme.color)}; color:#fff;">Today (urgent)</button>
-        <button class="mcm-sba-secondary" id="mcm-sba-urg-week">This week</button>
-        <button class="mcm-sba-secondary" id="mcm-sba-urg-quote">Just looking for pricing</button>
-      </div>
-      <div id="mcm-sba-urg-extra" style="margin-top:10px;"></div>
-    `;
-
-    const setUrgency = (key, label) => {
-      state.urgencyKey = key;
-      state.urgencyLabel = label;
-      postEvent_("urgency_selected", { urgency: key, urgency_label: label });
-
-      // Optional HOT helper: show a call-now button if a phone number exists
-      const extra = container.querySelector("#mcm-sba-urg-extra");
-      if (key === "today" && theme.phone) {
-        extra.innerHTML = `
-          <div class="mcm-sba-card">
-            <b>Urgent request flagged as HOT</b><br/>
-            <span class="mcm-sba-muted">If this is an emergency, call now. Otherwise, continue to get scheduled.</span>
-            <div class="mcm-sba-actions" style="margin-top:10px;">
-              <a class="mcm-sba-btn" href="tel:${escapeAttr_(theme.phone)}" style="background:${escapeAttr_(theme.color)}; color:#fff; text-decoration:none; display:inline-block;">Call now</a>
-              <button class="mcm-sba-secondary" id="mcm-sba-urg-continue">Continue</button>
-            </div>
-          </div>
-        `;
-        container.querySelector("#mcm-sba-urg-continue").addEventListener("click", () => {
-          renderServicePicker_(container, theme, state);
-        });
-        return;
-      }
-
-      renderServicePicker_(container, theme, state);
+    const toggle = (open) => {
+      const method = open ? "add" : "remove";
+      overlay.classList[method]("open");
+      panel.classList[method]("open");
+      if (open) postEvent_("widget_open", {});
     };
 
-    container.querySelector("#mcm-sba-urg-today").addEventListener("click", () => setUrgency("today", "Today (urgent)"));
-    container.querySelector("#mcm-sba-urg-week").addEventListener("click", () => setUrgency("week", "This week"));
-    container.querySelector("#mcm-sba-urg-quote").addEventListener("click", () => setUrgency("quote", "Just looking for pricing"));
+    launcher.querySelector("button").onclick = () => toggle(true);
+    overlay.onclick = () => toggle(false);
+    ui.closeBtn.onclick = () => toggle(false);
+
+    ui.render();
   }
 
-  function renderServicePicker_(container, theme, state) {
-    container.innerHTML = `
-      <div class="mcm-sba-muted">What would you like to book?</div>
-      <div style="margin-top:10px" id="mcm-sba-services"></div>
-      <div class="mcm-sba-actions">
-        <button class="mcm-sba-secondary" id="mcm-sba-request">Get Scheduled</button>
+  // ---------- RENDER: Inline ----------
+  function renderInline_(mount, theme, state, serviceMap) {
+    const panel = document.createElement("div");
+    panel.id = "mcm-sba-panel";
+    panel.className = "mcm-sba-inline-panel";
+    mount.appendChild(panel);
+
+    const ui = bindPanelLogic_(panel, theme, state, serviceMap);
+    ui.render();
+  }
+
+  // ---------- PANEL LOGIC ----------
+  function bindPanelLogic_(panel, theme, state, serviceMap) {
+    panel.innerHTML = `
+      <div class="mcm-sba-header">
+        <button class="mcm-sba-back" style="display:none;">‹</button>
+        <div>
+          <p class="mcm-sba-title">${escapeHtml_(theme.business)}</p>
+          <p class="mcm-sba-step">Step 1 of 3</p>
+        </div>
+        <button class="mcm-sba-close">×</button>
       </div>
+      <div class="mcm-sba-body"></div>
+      <div class="mcm-sba-footer" style="display:none;"></div>
     `;
 
-    const servicesEl = container.querySelector("#mcm-sba-services");
-    const requestBtn = container.querySelector("#mcm-sba-request");
+    const els = {
+      title: panel.querySelector(".mcm-sba-title"),
+      step: panel.querySelector(".mcm-sba-step"),
+      back: panel.querySelector(".mcm-sba-back"),
+      close: panel.querySelector(".mcm-sba-close"),
+      body: panel.querySelector(".mcm-sba-body"),
+      footer: panel.querySelector(".mcm-sba-footer")
+    };
 
-    // Match per-client CTA label
-    requestBtn.textContent = theme.primaryCta || "Get Scheduled";
-    // Hide request button if booking_mode is strictly instant
-    if (String(theme.bookingMode).toLowerCase() === "instant") {
-      requestBtn.style.display = "none";
-    }
+    const render = () => {
+      const currentView = state.stack[state.stack.length - 1];
+      els.body.classList.remove("mcm-sba-no-pad");
+      els.footer.style.display = "none";
+      els.back.style.display = state.stack.length > 1 ? "inline-flex" : "none";
 
-    theme.services.forEach(svc => {
-      const b = document.createElement("button");
-      b.className = "mcm-sba-service";
-      b.innerHTML = `
-        <div style="font-weight:800">${escapeHtml_(svc.label || "Service")}</div>
-        <div class="mcm-sba-muted">${escapeHtml_(svc.description || "")}</div>
+      if (currentView === "home") viewHome_(els, theme);
+      else if (currentView === "services") viewServices_(els, theme);
+      else if (currentView === "booking") viewBooking_(els, theme, state.data.service);
+      else if (currentView === "request") viewRequest_(els, theme, state.data);
+      else if (currentView === "success") viewSuccess_(els, theme);
+    };
+
+    panel.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-action]");
+      if (!btn) return;
+
+      const action = btn.dataset.action;
+      const payload = btn.dataset.payload || "";
+
+      try {
+        if (action === "back") {
+          if (state.stack.length > 1) state.stack.pop();
+          render();
+          return;
+        }
+
+        if (action === "nav-urgent") {
+          state.data.urgency = "today";
+          state.data.urgencyLabel = safeMenu_(theme, "urgent").label;
+          state.data.service = null;
+          state.data.serviceLabel = "";
+          state.stack.push("request"); // HOT lead capture by design
+          render();
+          return;
+        }
+
+        if (action === "nav-standard") {
+          state.data.urgency = "standard";
+          state.data.urgencyLabel = safeMenu_(theme, "standard").label;
+          state.data.service = null;
+          state.data.serviceLabel = "";
+          state.stack.push("services");
+          render();
+          return;
+        }
+
+        if (action === "nav-quote") {
+          state.data.urgency = "quote";
+          state.data.urgencyLabel = safeMenu_(theme, "quote").label;
+          state.data.service = null;
+          state.data.serviceLabel = "";
+          state.stack.push("request");
+          render();
+          return;
+        }
+
+        if (action === "select-service") {
+          const key = String(payload || "");
+          const svc = serviceMap[key] || null;
+
+          state.data.service = svc;
+          state.data.serviceLabel = svc ? String(svc.label || "General") : "General";
+
+          postEvent_("service_selected", { service_id: svc ? svc.id : "" });
+
+          // Decide booking vs request:
+          // - If request_fallback is true => request
+          // - If urgency is "today" => request
+          // - Else if booking_url (or defaultUrl) exists => booking
+          const svcFallback = svc ? normalizeBool_(svc.request_fallback) : false;
+          const targetUrl = String((svc && svc.booking_url) ? svc.booking_url : theme.defaultUrl || "").trim();
+
+          if (!svcFallback && targetUrl && state.data.urgency !== "today") {
+            // booking path
+            if (state.data.service) state.data.service.booking_url = targetUrl;
+            else state.data.service = { id: "booking", label: "Booking", booking_url: targetUrl };
+
+            state.stack.push("booking");
+          } else {
+            // request path
+            state.stack.push("request");
+          }
+
+          render();
+          return;
+        }
+
+        if (action === "manual-request") {
+          state.data.service = null;
+          state.data.serviceLabel = "General Request";
+          state.stack.push("request");
+          render();
+          return;
+        }
+
+        if (action === "fallback") {
+          state.stack.push("request");
+          render();
+          return;
+        }
+
+        if (action === "submit") {
+          handleSubmit_(btn, theme, state, render);
+          return;
+        }
+
+        if (action === "close-overlay") {
+          const ov = document.querySelector("#mcm-sba-overlay");
+          if (ov) ov.click();
+          return;
+        }
+      } catch (err) {
+        console.error("[MCM SBA Error]", err);
+        state.stack.push("request");
+        render();
+      }
+    });
+
+    els.back.setAttribute("data-action", "back");
+    return { render, closeBtn: els.close };
+  }
+
+  // ---------- VIEWS ----------
+  function viewHome_(els, theme) {
+    els.title.textContent = theme.business;
+    els.step.textContent = "Start";
+
+    const def = {
+      urgent:  { label: "Urgent — today", sub: "System down, security issue, or stoppage" },
+      standard:{ label: "This week",     sub: "Non-urgent support or follow-up" },
+      quote:   { label: "Quote / Question", sub: "Pricing, onboarding, or general info" },
+      book:    { label: "Book Appointment", sub: "Schedule a time with us" },
+      inquire: { label: "General Inquiry",  sub: "Questions about pricing or services" }
+    };
+
+    const txt = theme.text || {};
+
+    if (theme.showUrgentMenu) {
+      els.body.innerHTML = `
+        <div class="mcm-sba-muted" style="margin-bottom:10px;"><b>Quick question</b> — how quickly do you need help?</div>
+        <div class="mcm-sba-list">
+          ${renderRowItem_("nav-urgent",  "today", "#FF3B30", (txt.urgent?.label || def.urgent.label),   (txt.urgent?.sub || def.urgent.sub))}
+          ${renderRowItem_("nav-standard","week",  "#34C759", (txt.standard?.label || def.standard.label),(txt.standard?.sub || def.standard.sub))}
+          ${renderRowItem_("nav-quote",   "quote", "#007AFF", (txt.quote?.label || def.quote.label),     (txt.quote?.sub || def.quote.sub))}
+        </div>
       `;
-      b.addEventListener("click", () => {
-        postEvent_("service_selected", { service_id: svc.id || "", service_label: svc.label || "" });
-
-        const bookingUrl = String((svc.booking_url || (!svc.request_fallback ? theme.defaultUrl : "")) || "").trim();
-        const canFallback = svc.request_fallback !== false;
-        if (bookingUrl) svc.booking_url = bookingUrl;
-        const mode = String(theme.bookingMode || "both").toLowerCase();
-
-        // If a booking URL exists, show the embedded calendar/booking iframe
-        if (bookingUrl) {
-          renderBooking_(container, theme, svc, state);
-          return;
-        }
-
-        // If no booking URL, automatically fall back to request flow (unless disabled / instant-only)
-        if (canFallback && mode !== "instant") {
-          postEvent_("request_mode_open", { service_id: svc.id || "", service_label: svc.label || "" });
-          renderRequestForm_(container, theme, svc, state);
-          return;
-        }
-
-        // Graceful fallback
-        container.innerHTML = `
-          <div class="mcm-sba-card">
-            <b>${escapeHtml_(svc.label || "Service")}</b><br/>
-            Online booking is not available for this service. Please contact us and we’ll help you get scheduled.
-          </div>
-          <div class="mcm-sba-actions">
-            <button class="mcm-sba-secondary" id="mcm-sba-back">Back</button>
-          </div>
-        `;
-        container.querySelector("#mcm-sba-back").addEventListener("click", () => renderServicePicker_(container, theme));
-      });servicesEl.appendChild(b);
-    });
-
-    requestBtn.addEventListener("click", () => {
-      postEvent_("request_mode_open", {});
-      renderRequestForm_(container, theme, null, state);
-    });
-  }
-
-  function renderBooking_(container, theme, svc, state) {
-    const bookingUrl = String(svc.booking_url || "").trim();
-    const canFallback = svc.request_fallback !== false;
-
-    container.innerHTML = `
-      <div class="mcm-sba-muted"><b>${escapeHtml_(svc.label || "Booking")}</b></div>
-      ${bookingUrl ? `<iframe class="mcm-sba-iframe" src="${escapeAttr_(bookingUrl)}" loading="lazy"></iframe>` : `
-        <div class="mcm-sba-card">No booking link is configured for this service.</div>
-      `}
-      <div class="mcm-sba-actions">
-        <button class="mcm-sba-secondary" id="mcm-sba-back">Back</button>
-        <button class="mcm-sba-secondary" id="mcm-sba-done">Done</button>
-        ${canFallback ? `<button class="mcm-sba-primary" id="mcm-sba-request" style="background:${theme.color};color:#fff;">Can’t find a time? ${escapeHtml_(theme.primaryCta || "Get Scheduled")}</button>` : ""}
-      </div>
-    `;
-
-    // Track booking view (best-effort; true completion requires provider webhooks)
-    postEvent_("booking_opened", { service_id: svc.id || "", service_label: svc.label || "", urgency: state && state.urgencyKey || "", urgency_label: state && state.urgencyLabel || "" });
-
-    container.querySelector("#mcm-sba-back").addEventListener("click", () => {
-      renderServicePicker_(container, theme, state);
-    });
-
-    container.querySelector("#mcm-sba-done").addEventListener("click", () => {
-      const panel = container.closest("#mcm-sba-panel");
-      const closeBtn = panel && panel.querySelector(".mcm-sba-close");
-      if (closeBtn) closeBtn.click();
-    });
-
-    const req = container.querySelector("#mcm-sba-request");
-    if (req) {
-      req.addEventListener("click", () => {
-        postEvent_("request_fallback_opened", { service_id: svc.id || "", service_label: svc.label || "", urgency: state && state.urgencyKey || "", urgency_label: state && state.urgencyLabel || "" });
-        renderRequestForm_(container, theme, svc, state);
-      });
+    } else {
+      els.body.innerHTML = `
+        <div class="mcm-sba-muted" style="margin-bottom:10px;">How can we help you today?</div>
+        <div class="mcm-sba-list">
+          ${renderRowItem_("nav-standard","book",  "#34C759", (txt.book?.label || def.book.label),       (txt.book?.sub || def.book.sub))}
+          ${renderRowItem_("nav-quote",   "inquire","#007AFF",(txt.inquire?.label || def.inquire.label),(txt.inquire?.sub || def.inquire.sub))}
+        </div>
+      `;
     }
   }
 
-  function renderRequestForm_(container, theme, svc, state) {
-    const serviceId = svc?.id || "";
-    const serviceLabel = svc?.label || "";
+  function viewServices_(els, theme) {
+    els.title.textContent = theme.business;
+    els.step.textContent = "Select Service";
 
-    container.innerHTML = `
-      <div class="mcm-sba-muted"><b>${escapeHtml_(theme.primaryCta || "Get Scheduled")}</b> — we’ll contact you ASAP.${state && state.urgencyKey === "today" ? ` <span style="display:inline-block;margin-left:6px;padding:2px 8px;border-radius:999px;background:${escapeAttr_(theme.color)};color:#fff;font-size:12px;">HOT</span>` : ""}</div>
+    const services = Array.isArray(theme.services) ? theme.services : [];
+
+    els.body.innerHTML = `
+      <div class="mcm-sba-muted" style="margin-bottom:10px;">Choose what you need help with:</div>
+      <div class="mcm-sba-list">
+        ${services.map((s) => renderRowItem_("select-service", s._safeId || s.id, null, s.label || "Service", s.description || "")).join("")}
+        <button class="mcm-sba-rowitem" data-action="manual-request">
+          <div>Something else?</div><span>›</span>
+        </button>
+      </div>
+    `;
+  }
+
+  function viewBooking_(els, theme, svc) {
+    const url = svc ? String(svc.booking_url || "").trim() : "";
+
+    els.title.textContent = "Select Time";
+    els.step.textContent = svc ? String(svc.label || "Booking") : "Booking";
+
+    els.body.classList.add("mcm-sba-no-pad");
+    els.body.innerHTML = `
+      <iframe class="mcm-sba-iframe" src="${escapeAttr_(url)}" loading="lazy"></iframe>
+    `;
+
+    // Ensure height is adequate even if CSS is misloaded/cached (no visual redesign; just prevents tiny iframe)
+    const iframe = els.body.querySelector("iframe");
+    if (iframe) {
+      iframe.style.width = "100%";
+      iframe.style.minHeight = "680px";
+      iframe.style.border = "0";
+      iframe.setAttribute("title", "Scheduling");
+      iframe.setAttribute("allow", "clipboard-write; fullscreen");
+    }
+
+    els.footer.style.display = "block";
+    els.footer.innerHTML = `
+      <div class="mcm-sba-actions" style="margin-top:0;">
+        <button class="mcm-sba-secondary" data-action="fallback">Can't find a time?</button>
+      </div>
+    `;
+  }
+
+  function viewRequest_(els, theme, data) {
+    els.title.textContent = "Final Step";
+    els.step.textContent = "Contact Info";
+
+    const isHot = data.urgency === "today";
+    const detailsLabel = isHot ? "Critical Issue Details" : "Details";
+    const detailsPlace = isHot ? "Please describe the critical issue..." : "How can we help?";
+
+    els.body.innerHTML = `
+      <div class="mcm-sba-muted" style="margin-bottom:10px;">
+        <b>${escapeHtml_(theme.primaryCta)}</b> — we’ll contact you ASAP.
+        ${isHot ? ` <span class="mcm-sba-pill" style="background:${escapeAttr_(theme.color)};color:#fff;">HOT</span>` : ""}
+      </div>
 
       <div class="mcm-sba-label">Name</div>
       <input class="mcm-sba-input" id="mcm-name" placeholder="Full name" />
@@ -314,154 +400,200 @@
         </div>
         <div>
           <div class="mcm-sba-label">Phone</div>
-          <input class="mcm-sba-input" id="mcm-phone" placeholder="(707) 555-1212" />
+          <input class="mcm-sba-input" id="mcm-phone" placeholder="(555) 123-4567" />
         </div>
       </div>
 
-      <div class="mcm-sba-label">Preferred time</div>
-      <input class="mcm-sba-input" id="mcm-time" placeholder="Tomorrow afternoon / ASAP / next week" />
+      <div class="mcm-sba-label">${escapeHtml_(detailsLabel)}</div>
+      <textarea class="mcm-sba-input" id="mcm-msg" rows="3" placeholder="${escapeAttr_(detailsPlace)}"></textarea>
 
-      <div class="mcm-sba-label">What’s going on?</div>
-      <textarea class="mcm-sba-input" id="mcm-msg" rows="4" placeholder="Quick details help us route this properly"></textarea>
-
-      <!-- Honeypot (spam trap): keep hidden -->
-      <div style="position:absolute;left:-5000px;top:auto;width:1px;height:1px;overflow:hidden;">
-        <label>Company website</label>
-        <input id="mcm-hp" />
-      </div>
-
-      <div class="mcm-sba-actions">
-        <button class="mcm-sba-secondary" id="mcm-back">Back</button>
-        <button class="mcm-sba-primary" id="mcm-send" style="background:${theme.color};color:#fff;">Send request</button>
-      </div>
-
-      <div class="mcm-sba-muted" id="mcm-status" style="margin-top:10px;"></div>
+      <input id="mcm-hp" style="position:absolute; opacity:0; pointer-events:none; width:1px;" tabindex="-1" />
     `;
 
-    container.querySelector("#mcm-back").addEventListener("click", () => {
-      renderServicePicker_(container, theme, state);
-    });
-
-    container.querySelector("#mcm-send").addEventListener("click", async () => {
-      const name = val_("#mcm-name");
-      const email = val_("#mcm-email");
-      const phone = val_("#mcm-phone");
-      const preferred_time = val_("#mcm-time");
-      const message = val_("#mcm-msg");
-      const hp = val_("#mcm-hp");
-
-      const status = container.querySelector("#mcm-status");
-      status.textContent = "Sending…";
-
-      const payload = {
-        client_id: clientId,
-        session_id: sessionId,
-        intent: (state && state.urgencyKey === "today") ? "urgent" : "request",
-        service_id: serviceId,
-        service_label: serviceLabel,
-        name,
-        email,
-        phone,
-        preferred_time,
-        message,
-        company_website: hp,
-        source_url: location.href,
-        referrer: document.referrer || ""
-      };
-
-      const res = await postLead_(payload);
-      if (res && res.ok) {
-        postEvent_("lead_submitted", { intent: (state && state.urgencyKey === "today") ? "urgent" : "request", lead_id: res.lead_id || "" });
-        status.textContent = "✅ Sent. We’ll reach out shortly.";
-      } else {
-        status.textContent = "⚠️ Something went wrong. Please try again.";
-      }
-    });
+    els.footer.style.display = "block";
+    els.footer.innerHTML = `
+      <div class="mcm-sba-actions">
+        <button class="mcm-sba-primary" data-action="submit" style="background:${escapeAttr_(theme.color)};color:#fff;">Send Request</button>
+      </div>
+      <div class="mcm-sba-muted" id="mcm-status" style="margin-top:10px; text-align:center;"></div>
+    `;
   }
 
-  async function getConfig_(client) {
-    const url = `${apiBase}?action=config&client=${encodeURIComponent(client)}`;
-    const r = await fetch(url, { method: "GET" });
-    return await r.json();
+  function viewSuccess_(els, theme) {
+    els.title.textContent = "Received";
+    els.step.textContent = "";
+
+    els.body.innerHTML = `
+      <div class="mcm-sba-card" style="text-align:center; padding:30px 20px;">
+        <div style="font-size:40px; margin-bottom:10px;">✅</div>
+        <div style="font-weight:700; font-size:18px;">Received!</div>
+        <div class="mcm-sba-muted" style="margin-top:5px;">We will be in touch shortly.</div>
+      </div>
+    `;
+
+    els.footer.style.display = "block";
+    els.footer.innerHTML = `<button class="mcm-sba-secondary" data-action="close-overlay">Close</button>`;
   }
 
-  async function postEvent_(event_name, meta) {
+  // ---------- UI HELPERS ----------
+  function renderRowItem_(action, payload, color, title, sub) {
+    const dot = color
+      ? `<div style="background:${escapeAttr_(color)}; width:12px; height:12px; border-radius:50%; margin-right:12px; flex-shrink:0;"></div>`
+      : "";
+    return `
+      <button class="mcm-sba-rowitem" data-action="${escapeAttr_(action)}" data-payload="${escapeAttr_(String(payload || ""))}" style="display:flex; align-items:center;">
+        ${dot}
+        <div style="flex:1;">
+          ${escapeHtml_(title || "")}
+          <span class="mcm-sba-muted" style="display:block; font-size:13px; margin-top:2px;">${escapeHtml_(sub || "")}</span>
+        </div>
+        <span>›</span>
+      </button>
+    `;
+  }
+
+  function safeMenu_(theme, key) {
+    const def = {
+      urgent:  { label: "Urgent — today", sub: "System down, security issue, or stoppage" },
+      standard:{ label: "This week", sub: "Non-urgent support or follow-up" },
+      quote:   { label: "Quote / Question", sub: "Pricing, onboarding, or general info" }
+    };
+    const t = (theme.text && theme.text[key]) ? theme.text[key] : {};
+    return {
+      label: String(t.label || def[key]?.label || "").trim(),
+      sub: String(t.sub || def[key]?.sub || "").trim()
+    };
+  }
+
+  // ---------- SUBMIT ----------
+  async function handleSubmit_(btn, theme, state, renderFn) {
+    btn.textContent = "Sending...";
+    btn.disabled = true;
+
+    const val = (sel) => ((document.querySelector(sel) || {}).value || "").trim();
+
+    const payload = {
+      client_id: clientId,
+      session_id: sessionId,
+      intent: state.data.urgency === "today" ? "urgent" : "request",
+      service_id: state.data.service ? String(state.data.service.id || "") : "",
+      service_label: String(state.data.serviceLabel || "General"),
+      name: val("#mcm-name"),
+      email: val("#mcm-email"),
+      phone: val("#mcm-phone"),
+      message: val("#mcm-msg"),
+      company_website: val("#mcm-hp"), // honeypot
+      source_url: location.href
+    };
+
     try {
-      const url = `${apiBase}?action=event`;
-      await fetch(url, {
+      const res = await fetch(`${apiBase}?action=lead`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          client_id: clientId,
-          session_id: sessionId,
-          event_name,
-          service_id: meta?.service_id || "",
-          meta: { ...meta, v: VERSION },
-          source_url: location.href,
-          referrer: document.referrer || ""
-        })
-      });
-    } catch (_) {}
-  }
-
-  async function postLead_(payload) {
-    try {
-      const url = `${apiBase}?action=lead`;
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify(payload)
       });
-      return await r.json();
-    } catch (_) {
+
+      const json = await res.json().catch(() => ({}));
+      if (json && json.ok) {
+        state.stack = ["success"];
+        renderFn();
+        return;
+      }
+
+      throw new Error("API error");
+    } catch (e) {
+      btn.textContent = "Try Again";
+      btn.disabled = false;
+      const statusEl = document.querySelector("#mcm-status");
+      if (statusEl) statusEl.textContent = "Connection error. Please call us.";
+    }
+  }
+
+  // ---------- NETWORK ----------
+  async function getConfig_(client) {
+    try {
+      const res = await fetch(`${apiBase}?action=config&client=${encodeURIComponent(client)}`, {
+        method: "GET",
+        cache: "no-store"
+      });
+      return await res.json();
+    } catch (e) {
       return { ok: false };
     }
   }
 
-  function injectCss_() {
-    const href = SCRIPT.getAttribute("data-css") || "";
-    if (href) {
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = href;
-      document.head.appendChild(link);
-      return;
-    }
+  function postEvent_(name, meta) {
+    // Fire-and-forget, never block UI
+    fetch(`${apiBase}?action=event`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_id: clientId,
+        session_id: sessionId,
+        event_name: name,
+        meta: meta || {}
+      })
+    }).catch(() => {});
+  }
 
-    // Default assumes widget.css is alongside widget.js
-    const jsUrl = new URL(SCRIPT.src);
-    jsUrl.pathname = jsUrl.pathname.replace(/widget\.js$/, "widget.css");
+  // ---------- NORMALIZATION ----------
+  function normalizeService_(s, i) {
+    const obj = (s && typeof s === "object") ? { ...s } : {};
+    const id = (obj.id !== undefined && obj.id !== null) ? String(obj.id) : `svc_${i}`;
+
+    obj.id = id;
+    obj._safeId = String(obj._safeId || id);
+    obj._idxId = String(obj._idxId || `svc_${i}`);
+
+    const rawUrl = (obj.booking_url || obj.bookingUrl || obj.calendar_url || obj.url || obj.link || "");
+    obj.booking_url = String(rawUrl || "").trim();
+
+    // Normalize request_fallback to boolean
+    obj.request_fallback = normalizeBool_(obj.request_fallback);
+
+    // Keep label/description stable
+    obj.label = String(obj.label || "").trim();
+    obj.description = String(obj.description || "").trim();
+
+    return obj;
+  }
+
+  function normalizeBool_(v) {
+    if (v === true) return true;
+    if (v === false) return false;
+    const s = String(v || "").trim().toLowerCase();
+    return s === "true" || s === "yes" || s === "1";
+  }
+
+  // ---------- UTIL ----------
+  function injectCss_() {
+    const s = SCRIPT; // only at boot
+    const url = (s.getAttribute("data-css") || s.src.replace(/\.js(\?.*)?$/, ".css")).trim();
+    if (!url) return;
     const link = document.createElement("link");
     link.rel = "stylesheet";
-    link.href = jsUrl.toString();
+    link.href = url;
     document.head.appendChild(link);
   }
 
   function getOrCreateSessionId_() {
-    const key = "mcm_sba_session_id";
-    try {
-      const existing = localStorage.getItem(key);
-      if (existing) return existing;
-      const sid = "s_" + Math.random().toString(16).slice(2) + Date.now().toString(16);
-      localStorage.setItem(key, sid);
-      return sid;
-    } catch (_) {
-      return "s_" + Math.random().toString(16).slice(2);
+    let sid = "";
+    try { sid = localStorage.getItem("mcm_sba_sid") || ""; } catch (_) {}
+    if (!sid) {
+      sid = "s_" + Math.random().toString(36).slice(2);
+      try { localStorage.setItem("mcm_sba_sid", sid); } catch (_) {}
     }
-  }
-
-  function val_(sel) {
-    const el = document.querySelector(sel);
-    return el ? String(el.value || "").trim() : "";
+    return sid;
   }
 
   function escapeHtml_(s) {
-    return String(s || "").replace(/[&<>"']/g, c => ({
-      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-    }[c]));
+    return String(s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
   function escapeAttr_(s) {
-    return String(s || "").replace(/"/g, "%22");
+    return String(s || "").replace(/"/g, "&quot;");
   }
 })();

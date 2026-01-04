@@ -1,4 +1,4 @@
-/* MCM Smart Booking Assistant — Apple UI + Production Logic (v3.0.2)
+/* MCM Smart Booking Assistant — Apple UI + Production Logic (v3.0.3)
    - Preserves Apple-style UI (launcher, overlay, panel, list rows)
    - Fixes Calendly routing for "This week" (standard) services
    - Keeps "Urgent — today" -> HOT lead capture (request) by design
@@ -252,7 +252,7 @@
             else state.data.service = { id: "booking", label: "Booking", booking_url: targetUrl };
 
             state.data.bookingAttemptLogged = false;
-            postBookingAttempt_(state.data.service, targetUrl);
+            postBookingAttempt_(state, state.data.service, targetUrl);
             state.stack.push("booking");
           } else {
             // request path
@@ -540,7 +540,7 @@
     }).catch(() => {});
   }
 
-  function postBookingAttempt_(svc, bookingUrl) {
+  function postBookingAttempt_(state, svc, bookingUrl) {
     try {
       if (!svc || !bookingUrl) return;
       if (state.data.bookingAttemptLogged) return;
